@@ -23,8 +23,16 @@ final class InertiaScroller {
     private var velocityY: CGFloat = 0
     private var displayLink: CVDisplayLink?
     private var isScrolling: Bool = false
-    /// Friction computed from initial velocity magnitude (velocity-adaptive)
-    private var friction: CGFloat = 0.95
+
+    /// Continuous deceleration rate per millisecond (similar to UIScrollView.DecelerationRate.normal)
+    /// Higher value = slower decay = longer coast
+    private let decelerationRate: CGFloat = 0.998
+
+    /// Assumed frame interval in ms (for CVDisplayLink ~60Hz)
+    private let frameIntervalMs: CGFloat = 16.67
+
+    // Momentum phase tracking
+    private var hasEmittedMomentumBegan: Bool = false
 
     private init() {}
 
@@ -36,26 +44,20 @@ final class InertiaScroller {
         self.velocityX = velocityX
         self.velocityY = velocityY
         self.isScrolling = true
-
-        // Velocity-adaptive friction: small velocities decay fast, large ones carry
-        let magnitude = max(abs(velocityX), abs(velocityY))
-        if magnitude < 50 {
-            friction = 0.88       // ~8 frames to halve, stops in ~0.3s
-        } else if magnitude < 120 {
-            friction = 0.93       // ~10 frames to halve, stops in ~0.8s
-        } else if magnitude < 250 {
-            friction = 0.95       // ~14 frames to halve, stops in ~1.3s
-        } else {
-            friction = 0.97       // ~23 frames to halve, stops in ~3s
-        }
+        self.hasEmittedMomentumBegan = false
 
         startDisplayLink()
     }
 
     func stopInertia() {
+        if isScrolling && hasEmittedMomentumBegan {
+            // Send momentum ended event with zero delta
+            generateScrollEvent(momentumPhase: 4)  // 4 = ended
+        }
         isScrolling = false
         velocityX = 0
         velocityY = 0
+        hasEmittedMomentumBegan = false
         stopDisplayLink()
     }
 
@@ -95,29 +97,56 @@ final class InertiaScroller {
     private func updateInertia() {
         guard isScrolling else { return }
 
-        velocityX *= friction
-        velocityY *= friction
+        // Continuous exponential deceleration: v *= rate^dt
+        // This produces natural-feeling deceleration that slows quickly at first,
+        // then gently glides to a stop (like a physical object experiencing drag).
+        let decay = pow(decelerationRate, frameIntervalMs)
+        velocityX *= decay
+        velocityY *= decay
 
         if abs(velocityX) < minVelocity && abs(velocityY) < minVelocity {
             stopInertia()
             return
         }
 
-        generateScrollEvent()
+        // Determine momentum phase: began on first event, changed on subsequent
+        let phase: Int64 = hasEmittedMomentumBegan ? 2 : 1  // 1=began, 2=changed
+        hasEmittedMomentumBegan = true
+
+        generateScrollEvent(momentumPhase: phase)
     }
 
-    private func generateScrollEvent() {
+    private func generateScrollEvent(momentumPhase: Int64) {
+        let dy: Int32
+        let dx: Int32
+
+        if momentumPhase == 4 {
+            // Terminal event: zero delta
+            dy = 0
+            dx = 0
+        } else {
+            dy = Int32(velocityY)
+            dx = Int32(velocityX)
+        }
+
         guard let event = CGEvent(
             scrollWheelEvent2Source: nil,
             units: .pixel,
             wheelCount: 2,
-            wheel1: Int32(velocityY),
-            wheel2: Int32(velocityX),
+            wheel1: dy,
+            wheel2: dx,
             wheel3: 0
         ) else { return }
 
         // Tag with TrackPal signature so interceptor won't suppress our own events
         event.setIntegerValueField(.eventSourceUserData, value: kTrackPalEventSignature)
+
+        // Set phase fields: scrollPhase=0 (none), momentumPhase as specified
+        // Field 99 = kCGScrollWheelEventScrollPhase
+        // Field 123 = kCGScrollWheelEventMomentumPhase
+        event.setIntegerValueField(CGEventField(rawValue: 99)!, value: 0)
+        event.setIntegerValueField(CGEventField(rawValue: 123)!, value: momentumPhase)
+
         event.post(tap: .cghidEventTap)
     }
 }

@@ -145,15 +145,19 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private var scrollAccumulatorX: CGFloat = 0
     private var scrollAccumulatorY: CGFloat = 0
 
+    // Scroll phase tracking (for CGEvent scroll phase lifecycle)
+    private var hasEmittedScrollBegan: Bool = false
+
     // Scroll activation: determine if user really wants to scroll
     private var isScrollActivationPending: Bool = false
+    private var activationOriginalZone: ScrollZone = .none  // original zone before promotion
     private var activationFrames: [(x: CGFloat, y: CGFloat)] = []
     private var activationDeltas: [CGPoint] = []
-    private let activationFramesNeeded = 4
-    private let activationMaxFrames = 8           // max wait when barely moving
-    private let directionCoherenceThreshold: CGFloat = 0.55
-    private let minActivationMovement: CGFloat = 0.005
-    private let minActivationVelocity: CGFloat = 0.15  // normalized units/sec on scroll axis
+    private let activationFramesNeeded = 2
+    private let activationMaxFrames = 5           // max wait when barely moving
+    private let directionCoherenceThreshold: CGFloat = 0.40
+    private let minActivationMovement: CGFloat = 0.003
+    private let minActivationVelocity: CGFloat = 0.08  // normalized units/sec on scroll axis
 
     // Tap detection for middle click
     private var touchStartTime: Double = 0
@@ -286,9 +290,22 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 if isScrollZone(preliminaryZone) {
                     // All scroll zone touches enter activation pending
                     isScrollActivationPending = true
+                    activationOriginalZone = preliminaryZone
                     activationFrames = [(x: position.x, y: position.y)]
                     activationDeltas = []
+                    // Suppress system scroll events during activation evaluation
+                    // to prevent cursor movement before scroll starts
+                    isActivelyScrollingInZone = true
                     LogManager.shared.log(String(format: "Touch started at (%.2f, %.2f) zone: \(preliminaryZone) [ACTIVATING]", x, y))
+                } else if isCornerZone(preliminaryZone) {
+                    // Corner touches enter activation pending too:
+                    // if user slides (not taps), promote to adjacent scroll zone.
+                    isScrollActivationPending = true
+                    activationOriginalZone = preliminaryZone
+                    activationFrames = [(x: position.x, y: position.y)]
+                    activationDeltas = []
+                    isActivelyScrollingInZone = true
+                    LogManager.shared.log(String(format: "Touch started at (%.2f, %.2f) zone: \(preliminaryZone) [CORNER-PENDING]", x, y))
                 } else {
                     isScrollActivationPending = false
                     LogManager.shared.log(String(format: "Touch started at (%.2f, %.2f) zone: \(currentZone)", x, y))
@@ -315,33 +332,56 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 // Scroll activation: evaluate direction coherence
                 if isScrollActivationPending {
                     activationFrames.append((x: position.x, y: position.y))
-                    activationDeltas.append(delta)
 
-                    if activationFrames.count >= activationFramesNeeded {
+                    // Skip the very first delta (frame 1): the initial contact
+                    // frame is often noisy, especially at sensor edges where the
+                    // finger is only partially on the trackpad surface.
+                    if activationFrames.count > 1 {
+                        activationDeltas.append(delta)
+                    }
+
+                    // Need activationFramesNeeded deltas (first frame is skipped)
+                    if activationDeltas.count >= activationFramesNeeded {
                         let result = evaluateScrollIntent()
                         switch result {
                         case .activated:
                             isScrollActivationPending = false
-                            // Flush buffered deltas
-                            for buffered in activationDeltas {
-                                handleScroll(delta: buffered, zone: currentZone)
+                            // Flush buffered deltas with graduated ramp-up to avoid jump
+                            let count = activationDeltas.count
+                            for (index, buffered) in activationDeltas.enumerated() {
+                                let ramp = CGFloat(index + 1) / CGFloat(count + 1)
+                                let scaled = CGPoint(x: buffered.x * ramp, y: buffered.y * ramp)
+                                handleScroll(delta: scaled, zone: currentZone)
                             }
                             activationDeltas.removeAll()
                             LogManager.shared.log("Scroll activated: \(currentZone)")
 
                         case .rejected:
                             isScrollActivationPending = false
-                            currentZone = .center
                             activationDeltas.removeAll()
-                            LogManager.shared.log("Scroll rejected → center (cursor movement)")
+                            isActivelyScrollingInZone = false  // Release suppression
+                            if isCornerZone(activationOriginalZone) {
+                                // Restore corner zone so tap handler can still fire on lift-off
+                                currentZone = activationOriginalZone
+                                LogManager.shared.log("Scroll rejected → restored \(activationOriginalZone) (corner tap still possible)")
+                            } else {
+                                currentZone = .center
+                                LogManager.shared.log("Scroll rejected → center (cursor movement)")
+                            }
 
                         case .needMoreFrames:
                             // Keep waiting, but enforce upper limit
                             if activationFrames.count >= activationMaxFrames {
                                 isScrollActivationPending = false
-                                currentZone = .center
                                 activationDeltas.removeAll()
-                                LogManager.shared.log("Scroll timeout → center")
+                                isActivelyScrollingInZone = false  // Release suppression
+                                if isCornerZone(activationOriginalZone) {
+                                    currentZone = activationOriginalZone
+                                    LogManager.shared.log("Scroll timeout → restored \(activationOriginalZone)")
+                                } else {
+                                    currentZone = .center
+                                    LogManager.shared.log("Scroll timeout → center")
+                                }
                             }
                         }
                     }
@@ -359,6 +399,10 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             } else if isCornerZone(currentZone) {
                 handleCornerTap(zone: currentZone, endPosition: lastTouchPosition, endTime: timestamp)
             } else {
+                // Send scroll phase ended event before starting inertia
+                if hasEmittedScrollBegan {
+                    postScrollEvent(deltaX: 0, deltaY: 0, scrollPhase: 4, momentumPhase: 0)
+                }
                 startInertiaIfNeeded()
             }
             resetTracking()
@@ -390,18 +434,19 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         switch currentZone {
         case .leftEdge, .rightEdge:
             // Vertical scrolling - use Y velocity (inverted for natural scrolling)
-            scrollVelY = -avgVy * scrollMultiplier * 50
+            // Reduced from *50 to *20 to prevent content flying past
+            scrollVelY = -avgVy * scrollMultiplier * 20
         case .bottomEdge, .topEdge:
             // Horizontal scrolling - use X velocity (inverted for natural scrolling)
             // Compensate for trackpad aspect ratio (~1.6:1)
-            scrollVelX = -avgVx * scrollMultiplier * 50 * 1.6
+            scrollVelX = -avgVx * scrollMultiplier * 20 * 1.6
         default:
             return
         }
 
         // Only start inertia if velocity is significant
         // Below this: finger was slow/stationary — just stop, no coast
-        let minVelocityThreshold: CGFloat = 50.0
+        let minVelocityThreshold: CGFloat = 20.0
 
         if abs(scrollVelX) > minVelocityThreshold || abs(scrollVelY) > minVelocityThreshold {
             LogManager.shared.log(String(format: "Starting inertia vx=%.1f vy=%.1f", scrollVelX, scrollVelY))
@@ -415,11 +460,13 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         isTracking = false
         currentZone = .none
         isScrollActivationPending = false
+        activationOriginalZone = .none
         activationFrames.removeAll()
         activationDeltas.removeAll()
         velocityHistory.removeAll()
         scrollAccumulatorX = 0
         scrollAccumulatorY = 0
+        hasEmittedScrollBegan = false
         isActivelyScrollingInZone = false
     }
 
@@ -433,28 +480,146 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
     /// Evaluate whether the user intends to scroll based on direction coherence + on-axis velocity
     private func evaluateScrollIntent() -> ScrollIntentResult {
-        guard activationFrames.count >= 2 else { return .needMoreFrames }
+        guard activationDeltas.count >= 1 else { return .needMoreFrames }
 
-        let first = activationFrames.first!
-        let last = activationFrames.last!
-        let totalDx = abs(last.x - first.x)
-        let totalDy = abs(last.y - first.y)
+        // Use deltas (which already skip the noisy first frame) for direction analysis
+        var totalRawDx: CGFloat = 0
+        var totalRawDy: CGFloat = 0
+        for d in activationDeltas {
+            totalRawDx += abs(d.x)
+            totalRawDy += abs(d.y)
+        }
+
+        // --- Corner zone: promote to adjacent scroll zone based on movement ---
+        // When a touch starts in a corner, we don't know if the user wants a
+        // corner tap or a scroll. If they move enough, determine the dominant
+        // direction and promote to the appropriate *adjacent* edge scroll zone.
+        //
+        // Key insight: corners sit at the intersection of two edges. We should
+        // only promote to an edge that is:
+        //   1. Physically adjacent to the corner
+        //   2. Actually configured for scrolling
+        // E.g., bottom-left corner is adjacent to bottomEdge and leftEdge.
+        //       Promoting to rightEdge would be nonsensical.
+        if isCornerZone(currentZone) {
+            let totalMovement = totalRawDx + totalRawDy
+            if totalMovement < minActivationMovement {
+                return .needMoreFrames
+            }
+
+            // Determine which adjacent edges are available
+            let adjacentHorizontal: ScrollZone?
+            let adjacentVertical: ScrollZone?
+
+            switch currentZone {
+            case .bottomLeftCorner:
+                adjacentHorizontal = (horizontalPosition == .bottom) ? .bottomEdge : nil
+                adjacentVertical = (verticalEdgeMode == .left || verticalEdgeMode == .both) ? .leftEdge : nil
+            case .bottomRightCorner:
+                adjacentHorizontal = (horizontalPosition == .bottom) ? .bottomEdge : nil
+                adjacentVertical = (verticalEdgeMode == .right || verticalEdgeMode == .both) ? .rightEdge : nil
+            case .topLeftCorner:
+                adjacentHorizontal = (horizontalPosition == .top) ? .topEdge : nil
+                adjacentVertical = (verticalEdgeMode == .left || verticalEdgeMode == .both) ? .leftEdge : nil
+            case .topRightCorner:
+                adjacentHorizontal = (horizontalPosition == .top) ? .topEdge : nil
+                adjacentVertical = (verticalEdgeMode == .right || verticalEdgeMode == .both) ? .rightEdge : nil
+            default:
+                adjacentHorizontal = nil
+                adjacentVertical = nil
+            }
+
+            // Determine dominant direction with aspect ratio compensation
+            let compensatedDx = totalRawDx * 1.6
+            let promotedZone: ScrollZone
+
+            if let h = adjacentHorizontal, let v = adjacentVertical {
+                // Both adjacent edges are active — pick based on direction,
+                // but bias toward horizontal for bottom/top corners since
+                // sensor noise at the physical edge inflates Y readings
+                let isBottom = (currentZone == .bottomLeftCorner || currentZone == .bottomRightCorner)
+                let isTop = (currentZone == .topLeftCorner || currentZone == .topRightCorner)
+                let horizontalBias: CGFloat = (isBottom || isTop) ? 1.5 : 1.0
+
+                if compensatedDx * horizontalBias >= totalRawDy {
+                    promotedZone = h
+                } else {
+                    promotedZone = v
+                }
+            } else if let h = adjacentHorizontal {
+                // Only horizontal edge is available — promote there
+                promotedZone = h
+            } else if let v = adjacentVertical {
+                // Only vertical edge is available — promote there
+                promotedZone = v
+            } else {
+                // No adjacent edge is configured — reject
+                return .rejected
+            }
+
+            currentZone = promotedZone
+            LogManager.shared.log("Corner promoted → \(promotedZone)")
+            // Fall through to normal scroll evaluation with the new zone
+        }
+
+        // --- Normal scroll zone evaluation ---
+        // Compensate for trackpad aspect ratio (~1.6:1 width:height).
+        let aspectRatio: CGFloat = 1.6
+        let totalDx: CGFloat
+        let totalDy: CGFloat
+        switch currentZone {
+        case .bottomEdge, .topEdge:
+            totalDx = totalRawDx * aspectRatio
+            totalDy = totalRawDy
+        case .leftEdge, .rightEdge:
+            totalDx = totalRawDx
+            totalDy = totalRawDy * aspectRatio
+        default:
+            totalDx = totalRawDx
+            totalDy = totalRawDy
+        }
+
         let totalMovement = totalDx + totalDy
 
-        // Too little movement to determine intent
         if totalMovement < minActivationMovement {
             return .needMoreFrames
         }
+
+        // Determine if the touch started near the physical sensor edge.
+        // Sensor readings are inherently noisier at the very edge of the
+        // trackpad, so we use a more lenient coherence threshold there.
+        let startPos = activationFrames.first!
+        let isNearPhysicalEdge: Bool
+        switch currentZone {
+        case .bottomEdge:
+            isNearPhysicalEdge = startPos.y < 0.10
+        case .topEdge:
+            isNearPhysicalEdge = startPos.y > 0.90
+        case .leftEdge:
+            isNearPhysicalEdge = startPos.x < 0.10
+        case .rightEdge:
+            isNearPhysicalEdge = startPos.x > 0.90
+        default:
+            isNearPhysicalEdge = false
+        }
+        // Corners are always at the sensor edge
+        let isFromCorner = isNearPhysicalEdge || activationFrames.first.map { f in
+            f.x < cornerTriggerZoneSize || f.x > (1.0 - cornerTriggerZoneSize)
+        } ?? false
+
+        let effectiveThreshold = (isNearPhysicalEdge || isFromCorner)
+            ? directionCoherenceThreshold * 0.6  // ~0.24: lenient at sensor edge / corner
+            : directionCoherenceThreshold         // 0.40: normal
 
         // Check direction coherence
         let directionPasses: Bool
         switch currentZone {
         case .leftEdge, .rightEdge:
             let ratio = totalDy / totalMovement
-            directionPasses = ratio >= directionCoherenceThreshold
+            directionPasses = ratio >= effectiveThreshold
         case .bottomEdge, .topEdge:
             let ratio = totalDx / totalMovement
-            directionPasses = ratio >= directionCoherenceThreshold
+            directionPasses = ratio >= effectiveThreshold
         default:
             return .rejected
         }
@@ -463,8 +628,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             return .rejected
         }
 
-        // Check on-axis velocity using existing velocityHistory
-        // (already populated during activation frames — reuse, don't duplicate)
+        // Check on-axis velocity
         guard !velocityHistory.isEmpty else { return .needMoreFrames }
 
         var avgOnAxis: CGFloat = 0
@@ -481,7 +645,6 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         avgOnAxis /= CGFloat(velocityHistory.count)
 
         if avgOnAxis < minActivationVelocity {
-            // Moving in the right direction but too slowly — keep waiting
             return .needMoreFrames
         }
 
@@ -526,6 +689,10 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     }
 
     private func cancelActiveScrolling() {
+        // Send scroll phase ended if we had started tracking
+        if hasEmittedScrollBegan {
+            postScrollEvent(deltaX: 0, deltaY: 0, scrollPhase: 4, momentumPhase: 0)
+        }
         DispatchQueue.main.async {
             InertiaScroller.shared.stopInertia()
         }
@@ -751,10 +918,17 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
         guard scrollX != 0 || scrollY != 0 else { return }
 
-        postScrollEvent(deltaX: scrollX, deltaY: scrollY)
+        // Determine scroll phase: began on first event, changed on subsequent
+        let phase: Int64 = hasEmittedScrollBegan ? 2 : 1  // 1=began, 2=changed
+        hasEmittedScrollBegan = true
+
+        postScrollEvent(deltaX: scrollX, deltaY: scrollY, scrollPhase: phase, momentumPhase: 0)
     }
 
-    private func postScrollEvent(deltaX: Int32, deltaY: Int32) {
+    /// Post a scroll wheel CGEvent with phase metadata
+    /// - scrollPhase: 0=none, 1=began, 2=changed, 4=ended (matches NSEvent.Phase bitmask)
+    /// - momentumPhase: 0=none, 1=began, 2=changed, 4=ended
+    private func postScrollEvent(deltaX: Int32, deltaY: Int32, scrollPhase: Int64, momentumPhase: Int64) {
         guard let event = CGEvent(
             scrollWheelEvent2Source: nil,
             units: .pixel,
@@ -766,6 +940,13 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
         // Tag with TrackPal signature so interceptor won't suppress our own events
         event.setIntegerValueField(.eventSourceUserData, value: kTrackPalEventSignature)
+
+        // Set scroll phase fields (critical for native-feeling scroll in all apps)
+        // Field 99 = kCGScrollWheelEventScrollPhase (tracking/finger phase)
+        // Field 123 = kCGScrollWheelEventMomentumPhase (inertia phase)
+        event.setIntegerValueField(CGEventField(rawValue: 99)!, value: scrollPhase)
+        event.setIntegerValueField(CGEventField(rawValue: 123)!, value: momentumPhase)
+
         event.post(tap: .cghidEventTap)
     }
 
