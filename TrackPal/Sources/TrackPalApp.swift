@@ -89,6 +89,11 @@ final class Settings {
         static let cornerActionTopRight = "cornerActionTopRight"
         static let cornerActionBottomLeft = "cornerActionBottomLeft"
         static let cornerActionBottomRight = "cornerActionBottomRight"
+        static let filterLightTouches = "filterLightTouches"
+        static let filterLargeTouches = "filterLargeTouches"
+        static let lightTouchDensityThreshold = "lightTouchDensityThreshold"
+        static let largeTouchMajorAxisThreshold = "largeTouchMajorAxisThreshold"
+        static let largeTouchMinorAxisThreshold = "largeTouchMinorAxisThreshold"
     }
 
     // Properties with defaults (all features enabled by default)
@@ -116,7 +121,7 @@ final class Settings {
     }
 
     var bottomZoneHeight: CGFloat {
-        get { CGFloat(defaults.object(forKey: Keys.bottomZoneHeight) as? Double ?? 0.20) }
+        get { CGFloat(defaults.object(forKey: Keys.bottomZoneHeight) as? Double ?? 0.30) }
         set { defaults.set(Double(newValue), forKey: Keys.bottomZoneHeight) }
     }
 
@@ -212,6 +217,31 @@ final class Settings {
         set { defaults.set(newValue.rawValue, forKey: Keys.cornerActionBottomRight) }
     }
 
+    var filterLightTouches: Bool {
+        get { defaults.object(forKey: Keys.filterLightTouches) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.filterLightTouches) }
+    }
+
+    var filterLargeTouches: Bool {
+        get { defaults.object(forKey: Keys.filterLargeTouches) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.filterLargeTouches) }
+    }
+
+    var lightTouchDensityThreshold: Float {
+        get { defaults.object(forKey: Keys.lightTouchDensityThreshold) as? Float ?? 0.02 }
+        set { defaults.set(newValue, forKey: Keys.lightTouchDensityThreshold) }
+    }
+
+    var largeTouchMajorAxisThreshold: Float {
+        get { defaults.object(forKey: Keys.largeTouchMajorAxisThreshold) as? Float ?? 15.0 }
+        set { defaults.set(newValue, forKey: Keys.largeTouchMajorAxisThreshold) }
+    }
+
+    var largeTouchMinorAxisThreshold: Float {
+        get { defaults.object(forKey: Keys.largeTouchMinorAxisThreshold) as? Float ?? 12.0 }
+        set { defaults.set(newValue, forKey: Keys.largeTouchMinorAxisThreshold) }
+    }
+
     private init() {}
 
     func loadSettings() {
@@ -242,7 +272,14 @@ final class Settings {
             .bottomRightCorner: cornerActionBottomRight
         ]
 
-        NSLog("TrackPal: Settings loaded - enabled=\(isEnabled), middleClick=\(middleClickEnabled), launchAtLogin=\(launchAtLogin)")
+        // Touch filtering settings (Scroll2-style)
+        scroller.filterLightTouches = filterLightTouches
+        scroller.filterLargeTouches = filterLargeTouches
+        scroller.lightTouchDensityThreshold = lightTouchDensityThreshold
+        scroller.largeTouchMajorAxisThreshold = largeTouchMajorAxisThreshold
+        scroller.largeTouchMinorAxisThreshold = largeTouchMinorAxisThreshold
+
+        NSLog("TrackPal: Settings loaded - enabled=\(isEnabled), middleClick=\(middleClickEnabled), filterLight=\(filterLightTouches), filterLarge=\(filterLargeTouches)")
     }
 
     private func updateLaunchAtLogin(_ enabled: Bool) {

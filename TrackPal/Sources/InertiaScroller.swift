@@ -2,6 +2,9 @@ import Cocoa
 import CoreGraphics
 import CoreVideo
 
+// TrackPal event signature for identifying self-generated events
+private let kTrackPalEventSignature: Int64 = 0x5452504C  // "TRPL" in hex
+
 /// Handles inertia/momentum scrolling
 @MainActor
 final class InertiaScroller {
@@ -10,9 +13,9 @@ final class InertiaScroller {
 
     // MARK: - Configuration
 
-    var friction: CGFloat = 0.95
-    var minVelocity: CGFloat = 0.1
     var enabled: Bool = true
+    /// Minimum velocity to keep scrolling (raised to stop sooner)
+    var minVelocity: CGFloat = 2.0
 
     // MARK: - State
 
@@ -20,6 +23,8 @@ final class InertiaScroller {
     private var velocityY: CGFloat = 0
     private var displayLink: CVDisplayLink?
     private var isScrolling: Bool = false
+    /// Friction computed from initial velocity magnitude (velocity-adaptive)
+    private var friction: CGFloat = 0.95
 
     private init() {}
 
@@ -31,6 +36,18 @@ final class InertiaScroller {
         self.velocityX = velocityX
         self.velocityY = velocityY
         self.isScrolling = true
+
+        // Velocity-adaptive friction: small velocities decay fast, large ones carry
+        let magnitude = max(abs(velocityX), abs(velocityY))
+        if magnitude < 50 {
+            friction = 0.88       // ~8 frames to halve, stops in ~0.3s
+        } else if magnitude < 120 {
+            friction = 0.93       // ~10 frames to halve, stops in ~0.8s
+        } else if magnitude < 250 {
+            friction = 0.95       // ~14 frames to halve, stops in ~1.3s
+        } else {
+            friction = 0.97       // ~23 frames to halve, stops in ~3s
+        }
 
         startDisplayLink()
     }
@@ -99,6 +116,8 @@ final class InertiaScroller {
             wheel3: 0
         ) else { return }
 
+        // Tag with TrackPal signature so interceptor won't suppress our own events
+        event.setIntegerValueField(.eventSourceUserData, value: kTrackPalEventSignature)
         event.post(tap: .cghidEventTap)
     }
 }

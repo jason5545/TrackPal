@@ -1,5 +1,9 @@
 import Cocoa
 import CoreGraphics
+import QuartzCore
+
+// TrackPal event signature for identifying self-generated events
+private let kTrackPalEventSignature: Int64 = 0x5452504C  // "TRPL" in hex
 
 // Private CoreDock API for Show Desktop
 @_silgen_name("CoreDockSendNotification")
@@ -18,7 +22,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     var edgeZoneWidth: CGFloat = 0.15  // 15% from each edge
 
     /// Bottom zone height (0.0 - 1.0, percentage of trackpad)
-    var bottomZoneHeight: CGFloat = 0.20  // 20% from bottom
+    var bottomZoneHeight: CGFloat = 0.30  // 30% from bottom
 
     /// Scroll sensitivity multiplier
     var scrollMultiplier: CGFloat = 3.0
@@ -58,6 +62,29 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         .bottomRightCorner: .none
     ]
 
+    // MARK: - Touch Filtering Configuration (Scroll2-style)
+
+    /// Enable light touch filtering (reject barely-touching/hovering contacts)
+    var filterLightTouches: Bool = true
+
+    /// Enable large touch filtering (reject palm/wrist contacts)
+    var filterLargeTouches: Bool = true
+
+    /// Density threshold - touches below this are considered too light (hovering)
+    var lightTouchDensityThreshold: Float = 0.02
+
+    /// Major axis threshold - touches above this are considered palm/wrist
+    /// Normal finger: ~7-9, palm/wrist: ~15-25+
+    var largeTouchMajorAxisThreshold: Float = 15.0
+
+    /// Minor axis threshold - touches above this are considered palm/wrist
+    /// Normal finger: ~6-8, palm/wrist: ~12-20+
+    var largeTouchMinorAxisThreshold: Float = 12.0
+
+    // Touch filtering counters (for diagnostics)
+    private var filteredLightTouchCount: Int = 0
+    private var filteredLargeTouchCount: Int = 0
+
     enum VerticalEdgeMode: String, CaseIterable {
         case left = "左側"
         case right = "右側"
@@ -84,12 +111,47 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private var isTracking: Bool = false
     private var touchCount: Int = 0
 
+    // Concurrent touch detection state
+    private var currentGestureMode: GestureMode = .idle
+    private var activeFingerCount: Int = 0
+    private var multiToSingleTransitionTime: Double = 0
+    private let multiToSingleDebounce: Double = 0.15  // 150ms debounce
+
+    // Thread-safe flag for active zone scrolling (used by CGEventTap interceptor)
+    // Using os_unfair_lock instead of NSLock to avoid deadlock from C callback threads
+    private var _isActivelyScrollingInZone: Bool = false
+    private var scrollZoneLock = os_unfair_lock()
+
+    var isActivelyScrollingInZone: Bool {
+        get {
+            os_unfair_lock_lock(&scrollZoneLock)
+            defer { os_unfair_lock_unlock(&scrollZoneLock) }
+            return _isActivelyScrollingInZone
+        }
+        set {
+            os_unfair_lock_lock(&scrollZoneLock)
+            _isActivelyScrollingInZone = newValue
+            os_unfair_lock_unlock(&scrollZoneLock)
+        }
+    }
+
     // Velocity tracking for inertia
     private var lastTouchTime: Double = 0
     private var velocityX: CGFloat = 0
     private var velocityY: CGFloat = 0
     private var velocityHistory: [(vx: CGFloat, vy: CGFloat, time: Double)] = []
     private let velocityHistorySize = 5
+
+    // Sub-pixel scroll accumulator (prevents truncation dead zone)
+    private var scrollAccumulatorX: CGFloat = 0
+    private var scrollAccumulatorY: CGFloat = 0
+
+    // Intent prediction: defer zone decision near boundaries
+    private var isZonePending: Bool = false
+    private var pendingTouchFrames: [(x: CGFloat, y: CGFloat)] = []
+    private var pendingDeltas: [CGPoint] = []  // buffered deltas during pending period
+    private let pendingFramesNeeded = 3
+    private let boundaryMargin: CGFloat = 0.08  // 8% ambiguous margin around zone edges
 
     // Tap detection for middle click
     private var touchStartTime: Double = 0
@@ -120,6 +182,13 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         case notificationCenter = "通知中心"
     }
 
+    /// Gesture mode for tracking single vs multi-finger state
+    enum GestureMode {
+        case idle           // No touch
+        case singleFinger   // Single finger - TrackPal active
+        case multiFinger    // Multi-finger - system gestures
+    }
+
     // MARK: - Singleton
 
     private init() {}
@@ -129,44 +198,50 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     func start() {
         guard !isEnabled else { return }
 
-        NSLog("TrackPal: Starting zone scroller...")
+        LogManager.shared.log("Starting zone scroller...")
 
         guard let cfArray = MTDeviceCreateList() else {
-            NSLog("TrackPal: MTDeviceCreateList returned nil")
+            LogManager.shared.log("MTDeviceCreateList returned nil")
             return
         }
 
         let count = CFArrayGetCount(cfArray)
-        NSLog("TrackPal: Found \(count) multitouch device(s)")
+        LogManager.shared.log("Found \(count) multitouch device(s)")
 
         if count == 0 {
-            NSLog("TrackPal: No devices found")
+            LogManager.shared.log("No devices found")
             return
         }
 
         for i in 0..<count {
             guard let rawPtr = CFArrayGetValueAtIndex(cfArray, i) else {
-                NSLog("TrackPal: Device \(i) pointer is nil")
+                LogManager.shared.log("Device \(i) pointer is nil")
                 continue
             }
             // MTDeviceRef is void* - use UnsafeMutableRawPointer
             let device = UnsafeMutableRawPointer(mutating: rawPtr)
             devices.append(device)
 
-            NSLog("TrackPal: Device \(i) found, registering callback...")
+            LogManager.shared.log("Device \(i) found, registering callback...")
 
             // Use the refcon variant for better compatibility
             MTRegisterContactFrameCallbackWithRefcon(device, touchCallbackWithRefcon, nil)
             MTDeviceStart(device, 0)
-            NSLog("TrackPal: Device \(i) started")
+            LogManager.shared.log("Device \(i) started")
         }
 
+        // Start scroll event interceptor
+        ScrollEventInterceptor.shared.start()
+
         isEnabled = true
-        NSLog("TrackPal: Trackpad zone scrolling enabled successfully")
+        LogManager.shared.log("Trackpad zone scrolling enabled successfully")
     }
 
     func stop() {
         guard isEnabled else { return }
+
+        // Stop scroll event interceptor
+        ScrollEventInterceptor.shared.stop()
 
         for device in devices {
             MTDeviceStop(device)
@@ -174,7 +249,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
         devices.removeAll()
         isEnabled = false
-        NSLog("TrackPal: Trackpad zone scrolling disabled")
+        LogManager.shared.log("Trackpad zone scrolling disabled")
     }
 
     // MARK: - Touch Processing
@@ -197,14 +272,25 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 isTracking = true
                 lastTouchPosition = position
                 lastTouchTime = timestamp
-                currentZone = determineZone(position)
                 velocityHistory.removeAll()
 
                 // Record for tap detection
                 touchStartTime = timestamp
                 touchStartPosition = position
 
-                NSLog("TrackPal: Touch started at (%.2f, %.2f) zone: \(currentZone)", x, y)
+                // Intent prediction: defer zone if touch is near a boundary
+                let preliminaryZone = determineZone(position)
+                if isNearZoneBoundary(position) {
+                    isZonePending = true
+                    pendingTouchFrames = [(x: position.x, y: position.y)]
+                    pendingDeltas = []
+                    currentZone = preliminaryZone  // tentative
+                    LogManager.shared.log(String(format: "Touch started at (%.2f, %.2f) zone: \(preliminaryZone) [PENDING]", x, y))
+                } else {
+                    isZonePending = false
+                    currentZone = preliminaryZone
+                    LogManager.shared.log(String(format: "Touch started at (%.2f, %.2f) zone: \(currentZone)", x, y))
+                }
             } else {
                 let delta = CGPoint(
                     x: position.x - lastTouchPosition.x,
@@ -224,7 +310,30 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                     }
                 }
 
-                handleScroll(delta: delta, zone: currentZone)
+                // Resolve pending zone using movement direction
+                if isZonePending {
+                    pendingTouchFrames.append((x: position.x, y: position.y))
+                    pendingDeltas.append(delta)
+
+                    if pendingTouchFrames.count >= pendingFramesNeeded {
+                        let predicted = predictIntendedZone()
+                        if predicted != currentZone {
+                            LogManager.shared.log("Intent prediction: \(currentZone) → \(predicted)")
+                        }
+                        currentZone = predicted
+                        isZonePending = false
+
+                        // Flush buffered deltas with the resolved zone
+                        for buffered in pendingDeltas {
+                            handleScroll(delta: buffered, zone: currentZone)
+                        }
+                        pendingDeltas.removeAll()
+                    }
+                    // Don't scroll yet during pending — deltas are buffered
+                } else {
+                    handleScroll(delta: delta, zone: currentZone)
+                }
+
                 lastTouchPosition = position
                 lastTouchTime = timestamp
             }
@@ -269,15 +378,18 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             scrollVelY = -avgVy * scrollMultiplier * 50
         case .bottomEdge, .topEdge:
             // Horizontal scrolling - use X velocity (inverted for natural scrolling)
-            scrollVelX = -avgVx * scrollMultiplier * 50
+            // Compensate for trackpad aspect ratio (~1.6:1)
+            scrollVelX = -avgVx * scrollMultiplier * 50 * 1.6
         default:
             return
         }
 
         // Only start inertia if velocity is significant
-        let minVelocityThreshold: CGFloat = 5.0
+        // Below this: finger was slow/stationary — just stop, no coast
+        let minVelocityThreshold: CGFloat = 50.0
+
         if abs(scrollVelX) > minVelocityThreshold || abs(scrollVelY) > minVelocityThreshold {
-            NSLog("TrackPal: Starting inertia vx=%.1f vy=%.1f", scrollVelX, scrollVelY)
+            LogManager.shared.log(String(format: "Starting inertia vx=%.1f vy=%.1f", scrollVelX, scrollVelY))
             DispatchQueue.main.async {
                 InertiaScroller.shared.startInertia(velocityX: scrollVelX, velocityY: scrollVelY)
             }
@@ -287,7 +399,219 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     func resetTracking() {
         isTracking = false
         currentZone = .none
+        isZonePending = false
+        pendingTouchFrames.removeAll()
+        pendingDeltas.removeAll()
         velocityHistory.removeAll()
+        scrollAccumulatorX = 0
+        scrollAccumulatorY = 0
+        isActivelyScrollingInZone = false
+    }
+
+    // MARK: - Intent Prediction
+
+    /// Check if touch position is near a zone boundary (ambiguous region)
+    private func isNearZoneBoundary(_ position: CGPoint) -> Bool {
+        let y = position.y
+        let x = position.x
+
+        // Near bottom zone boundary
+        let bottomBound = bottomZoneHeight
+        if y > (bottomBound - boundaryMargin) && y < (bottomBound + boundaryMargin) {
+            return true
+        }
+
+        // Near top zone boundary (if horizontal position is top)
+        if horizontalPosition == .top {
+            let topBound = 1.0 - bottomZoneHeight
+            if y > (topBound - boundaryMargin) && y < (topBound + boundaryMargin) {
+                return true
+            }
+        }
+
+        // Near right edge boundary
+        let rightBound = 1.0 - edgeZoneWidth
+        if x > (rightBound - boundaryMargin) && x < (rightBound + boundaryMargin) {
+            return true
+        }
+
+        // Near left edge boundary (if left or both mode)
+        if verticalEdgeMode == .left || verticalEdgeMode == .both {
+            let leftBound = edgeZoneWidth
+            if x > (leftBound - boundaryMargin) && x < (leftBound + boundaryMargin) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    /// Predict intended zone from initial movement direction
+    private func predictIntendedZone() -> ScrollZone {
+        guard pendingTouchFrames.count >= 2 else {
+            return currentZone
+        }
+
+        let first = pendingTouchFrames.first!
+        let last = pendingTouchFrames.last!
+        let dx = abs(last.x - first.x)
+        let dy = abs(last.y - first.y)
+
+        let avgX = pendingTouchFrames.map(\.x).reduce(0, +) / CGFloat(pendingTouchFrames.count)
+        let avgY = pendingTouchFrames.map(\.y).reduce(0, +) / CGFloat(pendingTouchFrames.count)
+
+        // Near bottom zone boundary: horizontal movement → bottomEdge
+        let bottomBound = bottomZoneHeight
+        if avgY > (bottomBound - boundaryMargin) && avgY < (bottomBound + boundaryMargin) {
+            if dx > dy * 1.2 {
+                return .bottomEdge
+            }
+        }
+
+        // Near top zone boundary
+        if horizontalPosition == .top {
+            let topBound = 1.0 - bottomZoneHeight
+            if avgY > (topBound - boundaryMargin) && avgY < (topBound + boundaryMargin) {
+                if dx > dy * 1.2 {
+                    return .topEdge
+                }
+            }
+        }
+
+        // Near right edge boundary: vertical movement → rightEdge
+        let rightBound = 1.0 - edgeZoneWidth
+        if avgX > (rightBound - boundaryMargin) && avgX < (rightBound + boundaryMargin) {
+            if dy > dx * 1.2 {
+                return .rightEdge
+            }
+        }
+
+        // Near left edge boundary: vertical movement → leftEdge
+        if verticalEdgeMode == .left || verticalEdgeMode == .both {
+            let leftBound = edgeZoneWidth
+            if avgX > (leftBound - boundaryMargin) && avgX < (leftBound + boundaryMargin) {
+                if dy > dx * 1.2 {
+                    return .leftEdge
+                }
+            }
+        }
+
+        // No strong directional signal — use position-based detection
+        return determineZone(CGPoint(x: avgX, y: avgY))
+    }
+
+    // MARK: - Concurrent Touch Handling
+
+    func handleFingerCountTransition(from oldCount: Int, to newCount: Int) {
+        // Single → Multi: Cancel any active scrolling
+        if oldCount == 1 && newCount > 1 {
+            cancelActiveScrolling()
+            currentGestureMode = .multiFinger
+            LogManager.shared.log("Single→Multi transition, cancelling scroll")
+        }
+        // Multi → Single: Record time for debounce
+        else if oldCount > 1 && newCount == 1 {
+            multiToSingleTransitionTime = CACurrentMediaTime()
+            currentGestureMode = .singleFinger
+            LogManager.shared.log("Multi→Single transition, debounce active")
+        }
+        // Any → Zero: Reset to idle
+        else if newCount == 0 {
+            currentGestureMode = .idle
+        }
+        // Zero → One: Start single finger mode
+        else if oldCount == 0 && newCount == 1 {
+            currentGestureMode = .singleFinger
+        }
+
+        activeFingerCount = newCount
+    }
+
+    private func cancelActiveScrolling() {
+        DispatchQueue.main.async {
+            InertiaScroller.shared.stopInertia()
+        }
+        isActivelyScrollingInZone = false
+        resetTracking()
+    }
+
+    func shouldProcessSingleFingerTouch() -> Bool {
+        // Block if in multi-finger mode (system gesture active)
+        if currentGestureMode == .multiFinger { return false }
+
+        // Allow if idle (fresh start) or singleFinger mode
+        // Check debounce only after multi→single transition
+        if currentGestureMode == .singleFinger && multiToSingleTransitionTime > 0 {
+            let timeSinceTransition = CACurrentMediaTime() - multiToSingleTransitionTime
+            if timeSinceTransition < multiToSingleDebounce {
+                return false
+            }
+        }
+
+        return true
+    }
+
+    // MARK: - Touch Filtering (Scroll2-style)
+
+    enum TouchFilterResult {
+        case valid
+        case tooLight
+        case tooLarge
+    }
+
+    /// Process touch with filtering applied. Called from the callback on main thread.
+    func processFilteredTouch(x: Float, y: Float, state: Int32, timestamp: Double,
+                              density: Float, majorAxis: Float, minorAxis: Float) {
+        // Skip filtering for lift-off states (6=lifting, 7=released)
+        // Density drops to 0 on lift-off, which would falsely trigger light touch filter
+        // We must let lift-off reach processTouch for proper cleanup and inertia triggering
+        if state >= 6 {
+            processTouch(x: x, y: y, state: state, timestamp: timestamp)
+            return
+        }
+
+        let result = classifyTouchValues(density: density, majorAxis: majorAxis, minorAxis: minorAxis)
+
+        switch result {
+        case .valid:
+            processTouch(x: x, y: y, state: state, timestamp: timestamp)
+
+        case .tooLight:
+            filteredLightTouchCount += 1
+            if isTracking {
+                LogManager.shared.log(String(format: "Light touch filtered (density=%.3f) [count=%d]", density, filteredLightTouchCount))
+                resetTracking()
+            }
+
+        case .tooLarge:
+            filteredLargeTouchCount += 1
+            if isTracking {
+                LogManager.shared.log(String(format: "Large touch filtered (major=%.3f, minor=%.3f) [count=%d]", majorAxis, minorAxis, filteredLargeTouchCount))
+                resetTracking()
+            }
+        }
+    }
+
+    /// Classify touch using extracted values (thread-safe, no MTTouch struct needed)
+    func classifyTouchValues(density: Float, majorAxis: Float, minorAxis: Float) -> TouchFilterResult {
+        // Light touch filter: reject hovering / barely touching contacts
+        if filterLightTouches {
+            if density < lightTouchDensityThreshold {
+                return .tooLight
+            }
+        }
+
+        // Large touch filter: reject palm/wrist sized contacts
+        if filterLargeTouches {
+            if majorAxis > largeTouchMajorAxisThreshold {
+                return .tooLarge
+            }
+            if minorAxis > largeTouchMinorAxisThreshold {
+                return .tooLarge
+            }
+        }
+
+        return .valid
     }
 
     private func determineZone(_ position: CGPoint) -> ScrollZone {
@@ -400,27 +724,33 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         // Apply acceleration curve to delta
         let adjustedDelta = applyAccelerationCurve(delta)
 
-        var scrollX: Int32 = 0
-        var scrollY: Int32 = 0
-
         switch zone {
         case .leftEdge, .rightEdge:
             // Vertical scrolling - use Y delta
             // Natural scrolling: invert direction (swipe up = content moves up)
-            scrollY = Int32(-adjustedDelta.y * scrollMultiplier * 100)
+            scrollAccumulatorY += -adjustedDelta.y * scrollMultiplier * 100
+            isActivelyScrollingInZone = true
 
         case .bottomEdge, .topEdge:
             // Horizontal scrolling - use X delta
             // Natural scrolling: invert direction (swipe right = content moves right)
-            scrollX = Int32(-adjustedDelta.x * scrollMultiplier * 100)
+            // Compensate for trackpad aspect ratio (~1.6:1 width:height)
+            let aspectCompensation: CGFloat = 1.6
+            scrollAccumulatorX += -adjustedDelta.x * scrollMultiplier * 100 * aspectCompensation
+            isActivelyScrollingInZone = true
 
         case .center, .none, .middleClick,
              .topLeftCorner, .topRightCorner, .bottomLeftCorner, .bottomRightCorner:
-            // Normal trackpad behavior - don't intercept
+            isActivelyScrollingInZone = false
             return
         }
 
-        // Only post event if there's actual scroll
+        // Extract integer pixels from accumulator, keep fractional remainder
+        let scrollX = Int32(scrollAccumulatorX)
+        let scrollY = Int32(scrollAccumulatorY)
+        scrollAccumulatorX -= CGFloat(scrollX)
+        scrollAccumulatorY -= CGFloat(scrollY)
+
         guard scrollX != 0 || scrollY != 0 else { return }
 
         postScrollEvent(deltaX: scrollX, deltaY: scrollY)
@@ -436,6 +766,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             wheel3: 0
         ) else { return }
 
+        // Tag with TrackPal signature so interceptor won't suppress our own events
+        event.setIntegerValueField(.eventSourceUserData, value: kTrackPalEventSignature)
         event.post(tap: .cghidEventTap)
     }
 
@@ -481,7 +813,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             upEvent.post(tap: .cghidEventTap)
         }
 
-        NSLog("TrackPal: Middle click triggered")
+        LogManager.shared.log("Middle click triggered")
     }
 
     // MARK: - Corner Triggers
@@ -523,27 +855,27 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         case .missionControl:
             // Use private CoreDock API
             CoreDockSendNotification("com.apple.expose.awake" as CFString, nil)
-            NSLog("TrackPal: Mission Control triggered")
+            LogManager.shared.log("Mission Control triggered")
 
         case .appWindows:
             // Use private CoreDock API
             CoreDockSendNotification("com.apple.expose.front.awake" as CFString, nil)
-            NSLog("TrackPal: App Windows triggered")
+            LogManager.shared.log("App Windows triggered")
 
         case .showDesktop:
             // Use private CoreDock API
             CoreDockSendNotification("com.apple.showdesktop.awake" as CFString, nil)
-            NSLog("TrackPal: Show Desktop triggered")
+            LogManager.shared.log("Show Desktop triggered")
 
         case .launchpad:
             // Open Launchpad app directly
             NSWorkspace.shared.launchApplication("Launchpad")
-            NSLog("TrackPal: Launchpad triggered")
+            LogManager.shared.log("Launchpad triggered")
 
         case .notificationCenter:
             // Click on the top-right corner of the screen
             clickNotificationCenter()
-            NSLog("TrackPal: Notification Center triggered")
+            LogManager.shared.log("Notification Center triggered")
         }
     }
 
@@ -593,6 +925,11 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
 // MARK: - C Callback with Refcon
 
+/// Track previous finger count for transition detection
+nonisolated(unsafe) private var previousFingerCount: Int32 = 0
+/// Diagnostic: log touch values once for calibration
+nonisolated(unsafe) private var hasLoggedTouchValues: Bool = false
+
 private func touchCallbackWithRefcon(
     device: MTDeviceRef?,
     touches: UnsafeMutablePointer<MTTouch>?,
@@ -603,24 +940,177 @@ private func touchCallbackWithRefcon(
 ) {
     guard let touches = touches else { return }
 
+    let scroller = TrackpadZoneScroller.shared
+    let touchCount = Int(numTouches)
+    let prevCount = Int(previousFingerCount)
+    previousFingerCount = numTouches
+
     // Only process single-finger touches for zone scrolling
     if numTouches == 1 {
         let touch = touches[0]
         let ts = timestamp
 
+        // Diagnostic: log actual MTTouch values for threshold calibration
+        if !hasLoggedTouchValues && touch.state >= 4 {
+            hasLoggedTouchValues = true
+            LogManager.shared.log(String(format: "[DIAG] MTTouch values - density=%.4f, majorAxis=%.4f, minorAxis=%.4f, size=%.4f, angle=%.4f, state=%d", touch.density, touch.majorAxis, touch.minorAxis, touch.size, touch.angle, touch.state))
+        }
+
+        // Extract values from the touch struct BEFORE dispatching
+        let x = touch.normalized.position.x
+        let y = touch.normalized.position.y
+        let state = touch.state
+        let density = touch.density
+        let majorAxis = touch.majorAxis
+        let minorAxis = touch.minorAxis
+
         DispatchQueue.main.async {
-            TrackpadZoneScroller.shared.processTouch(
-                x: touch.normalized.position.x,
-                y: touch.normalized.position.y,
-                state: touch.state,
-                timestamp: ts
+            // Handle finger count transition synchronously within main thread block
+            if touchCount != prevCount {
+                scroller.handleFingerCountTransition(from: prevCount, to: touchCount)
+            }
+
+            // Check debounce after multi→single transition
+            guard scroller.shouldProcessSingleFingerTouch() else { return }
+
+            // Apply touch filtering, then process
+            scroller.processFilteredTouch(
+                x: x, y: y, state: state, timestamp: ts,
+                density: density, majorAxis: majorAxis, minorAxis: minorAxis
             )
         }
     } else if numTouches == 0 {
-        // All fingers lifted - trigger inertia with current timestamp
         let ts = timestamp
         DispatchQueue.main.async {
-            TrackpadZoneScroller.shared.processTouch(x: 0, y: 0, state: 7, timestamp: ts)
+            if touchCount != prevCount {
+                scroller.handleFingerCountTransition(from: prevCount, to: touchCount)
+            }
+            scroller.processTouch(x: 0, y: 0, state: 7, timestamp: ts)
+        }
+    } else {
+        // Multi-finger: handle transition, let system handle gestures
+        DispatchQueue.main.async {
+            if touchCount != prevCount {
+                scroller.handleFingerCountTransition(from: prevCount, to: touchCount)
+            }
         }
     }
+}
+
+// MARK: - Scroll Event Interceptor
+
+/// Intercepts system scroll events to prevent conflicts with TrackPal-generated events
+final class ScrollEventInterceptor: @unchecked Sendable {
+
+    static let shared = ScrollEventInterceptor()
+
+    fileprivate var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
+    private var isRunning: Bool = false
+    private let lock = NSLock()
+
+    private init() {}
+
+    func start() {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard !isRunning else { return }
+
+        let eventMask: CGEventMask = (1 << CGEventType.scrollWheel.rawValue)
+
+        // Create event tap at HID level (same as where we post events)
+        eventTap = CGEvent.tapCreate(
+            tap: .cghidEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: eventMask,
+            callback: scrollInterceptorCallback,
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        )
+
+        guard let eventTap = eventTap else {
+            LogManager.shared.log("Failed to create scroll event tap")
+            return
+        }
+
+        // Create run loop source and add to main run loop
+        runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
+
+        if let runLoopSource = runLoopSource {
+            CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
+            CGEvent.tapEnable(tap: eventTap, enable: true)
+            isRunning = true
+            LogManager.shared.log("Scroll event interceptor started")
+        }
+    }
+
+    func stop() {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard isRunning else { return }
+
+        if let eventTap = eventTap {
+            CGEvent.tapEnable(tap: eventTap, enable: false)
+        }
+
+        if let runLoopSource = runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
+        }
+
+        eventTap = nil
+        runLoopSource = nil
+        isRunning = false
+        LogManager.shared.log("Scroll event interceptor stopped")
+    }
+
+    /// Check if an event should be suppressed
+    func shouldSuppressEvent(_ event: CGEvent) -> Bool {
+        // Don't suppress if we're not actively scrolling in a zone
+        guard TrackpadZoneScroller.shared.isActivelyScrollingInZone else {
+            return false
+        }
+
+        // Don't suppress TrackPal's own events (identified by our signature)
+        let userData = event.getIntegerValueField(.eventSourceUserData)
+        if userData == kTrackPalEventSignature {
+            return false
+        }
+
+        // Suppress other scroll events while we're actively scrolling
+        return true
+    }
+}
+
+/// C callback for scroll event interception
+private func scrollInterceptorCallback(
+    proxy: CGEventTapProxy,
+    type: CGEventType,
+    event: CGEvent,
+    userInfo: UnsafeMutableRawPointer?
+) -> Unmanaged<CGEvent>? {
+
+    // Handle tap disabled event - re-enable
+    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+        if let userInfo = userInfo {
+            let interceptor = Unmanaged<ScrollEventInterceptor>.fromOpaque(userInfo).takeUnretainedValue()
+            if let eventTap = interceptor.eventTap {
+                CGEvent.tapEnable(tap: eventTap, enable: true)
+            }
+        }
+        return Unmanaged.passUnretained(event)
+    }
+
+    // Only handle scroll wheel events
+    guard type == .scrollWheel else {
+        return Unmanaged.passUnretained(event)
+    }
+
+    // Check if we should suppress this event
+    if ScrollEventInterceptor.shared.shouldSuppressEvent(event) {
+        return nil
+    }
+
+    return Unmanaged.passUnretained(event)
 }

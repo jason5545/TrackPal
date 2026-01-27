@@ -11,6 +11,7 @@
 		A1000003232F0003 /* InertiaScroller.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000013232F0003 /* InertiaScroller.swift */; };
 		A1000004232F0004 /* Configuration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000014232F0004 /* Configuration.swift */; };
 		A1000005232F0005 /* DeviceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000015232F0005 /* DeviceManager.swift */; };
+		A1000006232F0006 /* LogManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000016232F0006 /* LogManager.swift */; };
 		A1000008232F0008 /* TrackpadZoneScroller.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000018232F0008 /* TrackpadZoneScroller.swift */; };
 		A10000B0232F00B0 /* TrackPalApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A0232F00A0 /* TrackPalApp.swift */; };
 		A10000B1232F00B1 /* MenuBarPopupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A1232F00A1 /* MenuBarPopupView.swift */; };
@@ -26,6 +27,7 @@
 		A1000013232F0003 /* InertiaScroller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InertiaScroller.swift; sourceTree = "<group>"; };
 		A1000014232F0004 /* Configuration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Configuration.swift; sourceTree = "<group>"; };
 		A1000015232F0005 /* DeviceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceManager.swift; sourceTree = "<group>"; };
+		A1000016232F0006 /* LogManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogManager.swift; sourceTree = "<group>"; };
 		A1000018232F0008 /* TrackpadZoneScroller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackpadZoneScroller.swift; sourceTree = "<group>"; };
 		A1000019232F0009 /* MultitouchSupport.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MultitouchSupport.h; sourceTree = "<group>"; };
 		A100001A232F000A /* TrackPal-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TrackPal-Bridging-Header.h"; sourceTree = "<group>"; };
@@ -85,6 +87,7 @@
 				A1000013232F0003 /* InertiaScroller.swift */,
 				A1000014232F0004 /* Configuration.swift */,
 				A1000015232F0005 /* DeviceManager.swift */,
+				A1000016232F0006 /* LogManager.swift */,
 				A1000018232F0008 /* TrackpadZoneScroller.swift */,
 				A1000019232F0009 /* MultitouchSupport.h */,
 				A100001A232F000A /* TrackPal-Bridging-Header.h */,
@@ -205,6 +208,7 @@
 				A1000003232F0003 /* InertiaScroller.swift in Sources */,
 				A1000004232F0004 /* Configuration.swift in Sources */,
 				A1000005232F0005 /* DeviceManager.swift in Sources */,
+				A1000006232F0006 /* LogManager.swift in Sources */,
 				A1000008232F0008 /* TrackpadZoneScroller.swift in Sources */,
 				A10000B1232F00B1 /* MenuBarPopupView.swift in Sources */,
 				A10000B2232F00B2 /* DesignTokens.swift in Sources */,

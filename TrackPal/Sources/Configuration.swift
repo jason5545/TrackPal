@@ -54,7 +54,7 @@ final class Configuration {
         get { CGFloat(defaults.double(forKey: Keys.friction).nonZero ?? 0.95) }
         set {
             defaults.set(Double(newValue), forKey: Keys.friction)
-            InertiaScroller.shared.friction = newValue
+            // Friction is now velocity-adaptive in InertiaScroller, no external set needed
         }
     }
 
@@ -85,7 +85,7 @@ final class Configuration {
         ScrollManager.shared.scrollMultiplier = scrollMultiplier
         ScrollManager.shared.enableInertia = enableInertia
         ScrollManager.shared.smoothScrolling = smoothScrolling
-        InertiaScroller.shared.friction = friction
+        // Friction is now velocity-adaptive in InertiaScroller
     }
 
     // MARK: - App-specific Settings
