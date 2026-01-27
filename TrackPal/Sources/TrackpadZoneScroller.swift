@@ -145,12 +145,15 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private var scrollAccumulatorX: CGFloat = 0
     private var scrollAccumulatorY: CGFloat = 0
 
-    // Intent prediction: defer zone decision near boundaries
-    private var isZonePending: Bool = false
-    private var pendingTouchFrames: [(x: CGFloat, y: CGFloat)] = []
-    private var pendingDeltas: [CGPoint] = []  // buffered deltas during pending period
-    private let pendingFramesNeeded = 3
-    private let boundaryMargin: CGFloat = 0.08  // 8% ambiguous margin around zone edges
+    // Scroll activation: determine if user really wants to scroll
+    private var isScrollActivationPending: Bool = false
+    private var activationFrames: [(x: CGFloat, y: CGFloat)] = []
+    private var activationDeltas: [CGPoint] = []
+    private let activationFramesNeeded = 4
+    private let activationMaxFrames = 8           // max wait when barely moving
+    private let directionCoherenceThreshold: CGFloat = 0.55
+    private let minActivationMovement: CGFloat = 0.005
+    private let minActivationVelocity: CGFloat = 0.15  // normalized units/sec on scroll axis
 
     // Tap detection for middle click
     private var touchStartTime: Double = 0
@@ -277,17 +280,17 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 touchStartTime = timestamp
                 touchStartPosition = position
 
-                // Intent prediction: defer zone if touch is near a boundary
                 let preliminaryZone = determineZone(position)
-                if isNearZoneBoundary(position) {
-                    isZonePending = true
-                    pendingTouchFrames = [(x: position.x, y: position.y)]
-                    pendingDeltas = []
-                    currentZone = preliminaryZone  // tentative
-                    LogManager.shared.log(String(format: "Touch started at (%.2f, %.2f) zone: \(preliminaryZone) [PENDING]", x, y))
+                currentZone = preliminaryZone
+
+                if isScrollZone(preliminaryZone) {
+                    // All scroll zone touches enter activation pending
+                    isScrollActivationPending = true
+                    activationFrames = [(x: position.x, y: position.y)]
+                    activationDeltas = []
+                    LogManager.shared.log(String(format: "Touch started at (%.2f, %.2f) zone: \(preliminaryZone) [ACTIVATING]", x, y))
                 } else {
-                    isZonePending = false
-                    currentZone = preliminaryZone
+                    isScrollActivationPending = false
                     LogManager.shared.log(String(format: "Touch started at (%.2f, %.2f) zone: \(currentZone)", x, y))
                 }
             } else {
@@ -309,26 +312,39 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                     }
                 }
 
-                // Resolve pending zone using movement direction
-                if isZonePending {
-                    pendingTouchFrames.append((x: position.x, y: position.y))
-                    pendingDeltas.append(delta)
+                // Scroll activation: evaluate direction coherence
+                if isScrollActivationPending {
+                    activationFrames.append((x: position.x, y: position.y))
+                    activationDeltas.append(delta)
 
-                    if pendingTouchFrames.count >= pendingFramesNeeded {
-                        let predicted = predictIntendedZone()
-                        if predicted != currentZone {
-                            LogManager.shared.log("Intent prediction: \(currentZone) → \(predicted)")
-                        }
-                        currentZone = predicted
-                        isZonePending = false
+                    if activationFrames.count >= activationFramesNeeded {
+                        let result = evaluateScrollIntent()
+                        switch result {
+                        case .activated:
+                            isScrollActivationPending = false
+                            // Flush buffered deltas
+                            for buffered in activationDeltas {
+                                handleScroll(delta: buffered, zone: currentZone)
+                            }
+                            activationDeltas.removeAll()
+                            LogManager.shared.log("Scroll activated: \(currentZone)")
 
-                        // Flush buffered deltas with the resolved zone
-                        for buffered in pendingDeltas {
-                            handleScroll(delta: buffered, zone: currentZone)
+                        case .rejected:
+                            isScrollActivationPending = false
+                            currentZone = .center
+                            activationDeltas.removeAll()
+                            LogManager.shared.log("Scroll rejected → center (cursor movement)")
+
+                        case .needMoreFrames:
+                            // Keep waiting, but enforce upper limit
+                            if activationFrames.count >= activationMaxFrames {
+                                isScrollActivationPending = false
+                                currentZone = .center
+                                activationDeltas.removeAll()
+                                LogManager.shared.log("Scroll timeout → center")
+                            }
                         }
-                        pendingDeltas.removeAll()
                     }
-                    // Don't scroll yet during pending — deltas are buffered
                 } else {
                     handleScroll(delta: delta, zone: currentZone)
                 }
@@ -398,104 +414,88 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     func resetTracking() {
         isTracking = false
         currentZone = .none
-        isZonePending = false
-        pendingTouchFrames.removeAll()
-        pendingDeltas.removeAll()
+        isScrollActivationPending = false
+        activationFrames.removeAll()
+        activationDeltas.removeAll()
         velocityHistory.removeAll()
         scrollAccumulatorX = 0
         scrollAccumulatorY = 0
         isActivelyScrollingInZone = false
     }
 
-    // MARK: - Intent Prediction
+    // MARK: - Scroll Intent Detection
 
-    /// Check if touch position is near a zone boundary (ambiguous region)
-    private func isNearZoneBoundary(_ position: CGPoint) -> Bool {
-        let y = position.y
-        let x = position.x
-
-        // Near horizontal zone boundary (only check the active side)
-        if horizontalPosition == .bottom {
-            let bottomBound = bottomZoneHeight
-            if y > (bottomBound - boundaryMargin) && y < (bottomBound + boundaryMargin) {
-                return true
-            }
-        } else {
-            let topBound = 1.0 - bottomZoneHeight
-            if y > (topBound - boundaryMargin) && y < (topBound + boundaryMargin) {
-                return true
-            }
-        }
-
-        // Near right edge boundary
-        let rightBound = 1.0 - edgeZoneWidth
-        if x > (rightBound - boundaryMargin) && x < (rightBound + boundaryMargin) {
-            return true
-        }
-
-        // Near left edge boundary (if left or both mode)
-        if verticalEdgeMode == .left || verticalEdgeMode == .both {
-            let leftBound = edgeZoneWidth
-            if x > (leftBound - boundaryMargin) && x < (leftBound + boundaryMargin) {
-                return true
-            }
-        }
-
-        return false
+    enum ScrollIntentResult {
+        case activated      // Direction coherent, start scrolling
+        case rejected       // Direction mismatch, demote to center
+        case needMoreFrames // Too little movement, need more data
     }
 
-    /// Predict intended zone from initial movement direction
-    private func predictIntendedZone() -> ScrollZone {
-        guard pendingTouchFrames.count >= 2 else {
-            return currentZone
+    /// Evaluate whether the user intends to scroll based on direction coherence + on-axis velocity
+    private func evaluateScrollIntent() -> ScrollIntentResult {
+        guard activationFrames.count >= 2 else { return .needMoreFrames }
+
+        let first = activationFrames.first!
+        let last = activationFrames.last!
+        let totalDx = abs(last.x - first.x)
+        let totalDy = abs(last.y - first.y)
+        let totalMovement = totalDx + totalDy
+
+        // Too little movement to determine intent
+        if totalMovement < minActivationMovement {
+            return .needMoreFrames
         }
 
-        let first = pendingTouchFrames.first!
-        let last = pendingTouchFrames.last!
-        let dx = abs(last.x - first.x)
-        let dy = abs(last.y - first.y)
+        // Check direction coherence
+        let directionPasses: Bool
+        switch currentZone {
+        case .leftEdge, .rightEdge:
+            let ratio = totalDy / totalMovement
+            directionPasses = ratio >= directionCoherenceThreshold
+        case .bottomEdge, .topEdge:
+            let ratio = totalDx / totalMovement
+            directionPasses = ratio >= directionCoherenceThreshold
+        default:
+            return .rejected
+        }
 
-        let avgX = pendingTouchFrames.map(\.x).reduce(0, +) / CGFloat(pendingTouchFrames.count)
-        let avgY = pendingTouchFrames.map(\.y).reduce(0, +) / CGFloat(pendingTouchFrames.count)
+        if !directionPasses {
+            return .rejected
+        }
 
-        // Near bottom zone boundary: horizontal movement → bottomEdge
-        let bottomBound = bottomZoneHeight
-        if avgY > (bottomBound - boundaryMargin) && avgY < (bottomBound + boundaryMargin) {
-            if dx > dy * 1.2 {
-                return .bottomEdge
+        // Check on-axis velocity using existing velocityHistory
+        // (already populated during activation frames — reuse, don't duplicate)
+        guard !velocityHistory.isEmpty else { return .needMoreFrames }
+
+        var avgOnAxis: CGFloat = 0
+        for v in velocityHistory {
+            switch currentZone {
+            case .leftEdge, .rightEdge:
+                avgOnAxis += abs(v.vy)
+            case .bottomEdge, .topEdge:
+                avgOnAxis += abs(v.vx)
+            default:
+                break
             }
         }
+        avgOnAxis /= CGFloat(velocityHistory.count)
 
-        // Near top zone boundary
-        if horizontalPosition == .top {
-            let topBound = 1.0 - bottomZoneHeight
-            if avgY > (topBound - boundaryMargin) && avgY < (topBound + boundaryMargin) {
-                if dx > dy * 1.2 {
-                    return .topEdge
-                }
-            }
+        if avgOnAxis < minActivationVelocity {
+            // Moving in the right direction but too slowly — keep waiting
+            return .needMoreFrames
         }
 
-        // Near right edge boundary: vertical movement → rightEdge
-        let rightBound = 1.0 - edgeZoneWidth
-        if avgX > (rightBound - boundaryMargin) && avgX < (rightBound + boundaryMargin) {
-            if dy > dx * 1.2 {
-                return .rightEdge
-            }
-        }
+        return .activated
+    }
 
-        // Near left edge boundary: vertical movement → leftEdge
-        if verticalEdgeMode == .left || verticalEdgeMode == .both {
-            let leftBound = edgeZoneWidth
-            if avgX > (leftBound - boundaryMargin) && avgX < (leftBound + boundaryMargin) {
-                if dy > dx * 1.2 {
-                    return .leftEdge
-                }
-            }
+    /// Check if a zone is a scroll zone (edges that produce scroll events)
+    private func isScrollZone(_ zone: ScrollZone) -> Bool {
+        switch zone {
+        case .leftEdge, .rightEdge, .bottomEdge, .topEdge:
+            return true
+        default:
+            return false
         }
-
-        // No strong directional signal — use position-based detection
-        return determineZone(CGPoint(x: avgX, y: avgY))
     }
 
     // MARK: - Concurrent Touch Handling
