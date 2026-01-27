@@ -10,6 +10,13 @@ struct MenuBarPopupView: View {
     @State private var edgeMode: TrackpadZoneScroller.VerticalEdgeMode = Settings.shared.verticalEdgeMode
     @State private var horizontalPosition: TrackpadZoneScroller.HorizontalPosition = Settings.shared.horizontalPosition
     @State private var middleClickEnabled: Bool = Settings.shared.middleClickEnabled
+    @State private var accelerationCurve: TrackpadZoneScroller.AccelerationCurveType = Settings.shared.accelerationCurveType
+    @State private var cornerTriggerEnabled: Bool = Settings.shared.cornerTriggerEnabled
+    @State private var cornerTriggerZoneSize: Double = Double(Settings.shared.cornerTriggerZoneSize)
+    @State private var cornerActionTopLeft: TrackpadZoneScroller.CornerAction = Settings.shared.cornerActionTopLeft
+    @State private var cornerActionTopRight: TrackpadZoneScroller.CornerAction = Settings.shared.cornerActionTopRight
+    @State private var cornerActionBottomLeft: TrackpadZoneScroller.CornerAction = Settings.shared.cornerActionBottomLeft
+    @State private var cornerActionBottomRight: TrackpadZoneScroller.CornerAction = Settings.shared.cornerActionBottomRight
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
@@ -102,9 +109,11 @@ struct MenuBarPopupView: View {
                 bottomHeight: CGFloat(bottomHeight),
                 edgeMode: edgeMode,
                 horizontalPosition: horizontalPosition,
-                middleClickEnabled: middleClickEnabled
+                middleClickEnabled: middleClickEnabled,
+                cornerTriggerEnabled: cornerTriggerEnabled,
+                cornerTriggerZoneSize: CGFloat(cornerTriggerZoneSize)
             )
-            TrackpadLegendView(middleClickEnabled: middleClickEnabled)
+            TrackpadLegendView(middleClickEnabled: middleClickEnabled, cornerTriggerEnabled: cornerTriggerEnabled)
         }
     }
 
@@ -202,7 +211,114 @@ struct MenuBarPopupView: View {
                 Settings.shared.scrollMultiplier = CGFloat(newValue)
                 TrackpadZoneScroller.shared.scrollMultiplier = CGFloat(newValue)
             }
+
+            // Acceleration curve picker
+            HStack {
+                Text("捲動加速曲線")
+                    .font(DesignTokens.Typography.body)
+                    .foregroundStyle(DesignTokens.Colors.textPrimary)
+                Spacer()
+                Picker("", selection: $accelerationCurve) {
+                    ForEach(TrackpadZoneScroller.AccelerationCurveType.allCases, id: \.self) { curve in
+                        Text(curve.rawValue).tag(curve)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 180)
+                .onChange(of: accelerationCurve) { _, newValue in
+                    Settings.shared.accelerationCurveType = newValue
+                    TrackpadZoneScroller.shared.accelerationCurveType = newValue
+                }
+            }
+            .padding(.vertical, DesignTokens.Spacing.xs)
+
+            Divider()
+
+            // Corner triggers section
+            cornerTriggersSection
         }
+    }
+
+    private var cornerTriggersSection: some View {
+        VStack(spacing: DesignTokens.Spacing.sm) {
+            Text("角落觸發")
+                .sectionHeaderStyle()
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Enable toggle
+            Toggle(isOn: $cornerTriggerEnabled) {
+                HStack {
+                    Image(systemName: "rectangle.dashed.badge.record")
+                        .foregroundStyle(cornerTriggerEnabled ? DesignTokens.Colors.accentPrimary : DesignTokens.Colors.textSecondary)
+                    Text("啟用角落觸發")
+                        .font(DesignTokens.Typography.body)
+                }
+            }
+            .toggleStyle(.switch)
+            .onChange(of: cornerTriggerEnabled) { _, newValue in
+                Settings.shared.cornerTriggerEnabled = newValue
+                TrackpadZoneScroller.shared.cornerTriggerEnabled = newValue
+            }
+
+            if cornerTriggerEnabled {
+                // Corner zone size slider
+                SettingsSliderRow(
+                    title: "角落區域大小",
+                    value: $cornerTriggerZoneSize,
+                    range: 0.05...0.25,
+                    format: { "\(Int($0 * 100))%" }
+                )
+                .onChange(of: cornerTriggerZoneSize) { _, newValue in
+                    Settings.shared.cornerTriggerZoneSize = CGFloat(newValue)
+                    TrackpadZoneScroller.shared.cornerTriggerZoneSize = CGFloat(newValue)
+                }
+
+                // Corner action pickers
+                cornerActionPicker(title: "左上角", selection: $cornerActionTopLeft) { newValue in
+                    Settings.shared.cornerActionTopLeft = newValue
+                    TrackpadZoneScroller.shared.cornerActions[.topLeftCorner] = newValue
+                }
+
+                cornerActionPicker(title: "右上角", selection: $cornerActionTopRight) { newValue in
+                    Settings.shared.cornerActionTopRight = newValue
+                    TrackpadZoneScroller.shared.cornerActions[.topRightCorner] = newValue
+                }
+
+                cornerActionPicker(title: "左下角", selection: $cornerActionBottomLeft) { newValue in
+                    Settings.shared.cornerActionBottomLeft = newValue
+                    TrackpadZoneScroller.shared.cornerActions[.bottomLeftCorner] = newValue
+                }
+
+                cornerActionPicker(title: "右下角", selection: $cornerActionBottomRight) { newValue in
+                    Settings.shared.cornerActionBottomRight = newValue
+                    TrackpadZoneScroller.shared.cornerActions[.bottomRightCorner] = newValue
+                }
+            }
+        }
+    }
+
+    private func cornerActionPicker(
+        title: String,
+        selection: Binding<TrackpadZoneScroller.CornerAction>,
+        onChange: @escaping (TrackpadZoneScroller.CornerAction) -> Void
+    ) -> some View {
+        HStack {
+            Text(title)
+                .font(DesignTokens.Typography.body)
+                .foregroundStyle(DesignTokens.Colors.textPrimary)
+            Spacer()
+            Picker("", selection: selection) {
+                ForEach(TrackpadZoneScroller.CornerAction.allCases, id: \.self) { action in
+                    Text(action.rawValue).tag(action)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(width: 140)
+            .onChange(of: selection.wrappedValue) { _, newValue in
+                onChange(newValue)
+            }
+        }
+        .padding(.vertical, DesignTokens.Spacing.xxs)
     }
 
     private var footerSection: some View {

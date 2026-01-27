@@ -21,6 +21,7 @@ enum DesignTokens {
         static let verticalZone = Color.blue.opacity(0.3)
         static let horizontalZone = Color.green.opacity(0.3)
         static let middleClickZone = Color.purple.opacity(0.3)
+        static let cornerTriggerZone = Color.orange.opacity(0.3)
 
         // Separators & Borders
         static let separator = Color(nsColor: .separatorColor)

@@ -8,6 +8,24 @@ struct TrackpadDiagramView: View {
     let edgeMode: TrackpadZoneScroller.VerticalEdgeMode
     let horizontalPosition: TrackpadZoneScroller.HorizontalPosition
     let middleClickEnabled: Bool
+    let cornerTriggerEnabled: Bool
+    let cornerTriggerZoneSize: CGFloat
+
+    init(edgeWidth: CGFloat,
+         bottomHeight: CGFloat,
+         edgeMode: TrackpadZoneScroller.VerticalEdgeMode,
+         horizontalPosition: TrackpadZoneScroller.HorizontalPosition,
+         middleClickEnabled: Bool,
+         cornerTriggerEnabled: Bool = false,
+         cornerTriggerZoneSize: CGFloat = 0.15) {
+        self.edgeWidth = edgeWidth
+        self.bottomHeight = bottomHeight
+        self.edgeMode = edgeMode
+        self.horizontalPosition = horizontalPosition
+        self.middleClickEnabled = middleClickEnabled
+        self.cornerTriggerEnabled = cornerTriggerEnabled
+        self.cornerTriggerZoneSize = cornerTriggerZoneSize
+    }
 
     private var showLeftEdge: Bool {
         edgeMode == .left || edgeMode == .both
@@ -28,6 +46,7 @@ struct TrackpadDiagramView: View {
             let horizontalZonePixels = height * bottomHeight
             let middleClickWidth = width * middleClickZoneWidth
             let middleClickHeight = height * middleClickZoneHeight
+            let cornerSize = min(width, height) * cornerTriggerZoneSize
 
             ZStack {
                 // Trackpad outline
@@ -71,6 +90,37 @@ struct TrackpadDiagramView: View {
                         .fill(DesignTokens.Colors.middleClickZone)
                         .frame(width: middleClickWidth, height: middleClickHeight)
                         .frame(maxHeight: .infinity, alignment: horizontalPosition == .bottom ? .top : .bottom)
+                        .padding(2)
+                }
+
+                // Corner trigger zones
+                if cornerTriggerEnabled {
+                    // Top-left corner
+                    Rectangle()
+                        .fill(DesignTokens.Colors.cornerTriggerZone)
+                        .frame(width: cornerSize, height: cornerSize)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .padding(2)
+
+                    // Top-right corner
+                    Rectangle()
+                        .fill(DesignTokens.Colors.cornerTriggerZone)
+                        .frame(width: cornerSize, height: cornerSize)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .padding(2)
+
+                    // Bottom-left corner
+                    Rectangle()
+                        .fill(DesignTokens.Colors.cornerTriggerZone)
+                        .frame(width: cornerSize, height: cornerSize)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                        .padding(2)
+
+                    // Bottom-right corner
+                    Rectangle()
+                        .fill(DesignTokens.Colors.cornerTriggerZone)
+                        .frame(width: cornerSize, height: cornerSize)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                         .padding(2)
                 }
 
@@ -131,6 +181,12 @@ struct TrackpadDiagramView: View {
 /// Legend for trackpad zones
 struct TrackpadLegendView: View {
     let middleClickEnabled: Bool
+    let cornerTriggerEnabled: Bool
+
+    init(middleClickEnabled: Bool, cornerTriggerEnabled: Bool = false) {
+        self.middleClickEnabled = middleClickEnabled
+        self.cornerTriggerEnabled = cornerTriggerEnabled
+    }
 
     var body: some View {
         HStack(spacing: DesignTokens.Spacing.md) {
@@ -165,6 +221,18 @@ struct TrackpadLegendView: View {
                         .foregroundStyle(DesignTokens.Colors.textSecondary)
                 }
             }
+
+            if cornerTriggerEnabled {
+                HStack(spacing: DesignTokens.Spacing.xs) {
+                    Rectangle()
+                        .fill(DesignTokens.Colors.cornerTriggerZone)
+                        .frame(width: 12, height: 12)
+                        .cornerRadius(2)
+                    Text("角落")
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundStyle(DesignTokens.Colors.textSecondary)
+                }
+            }
         }
     }
 }
@@ -176,9 +244,11 @@ struct TrackpadLegendView: View {
             bottomHeight: 0.20,
             edgeMode: .right,
             horizontalPosition: .bottom,
-            middleClickEnabled: true
+            middleClickEnabled: true,
+            cornerTriggerEnabled: true,
+            cornerTriggerZoneSize: 0.15
         )
-        TrackpadLegendView(middleClickEnabled: true)
+        TrackpadLegendView(middleClickEnabled: true, cornerTriggerEnabled: true)
     }
     .padding()
     .frame(width: 300)

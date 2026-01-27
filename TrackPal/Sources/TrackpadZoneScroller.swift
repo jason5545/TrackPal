@@ -1,6 +1,10 @@
 import Cocoa
 import CoreGraphics
 
+// Private CoreDock API for Show Desktop
+@_silgen_name("CoreDockSendNotification")
+func CoreDockSendNotification(_ notification: CFString, _ unknown: UnsafeMutableRawPointer?) -> Void
+
 /// Trackpad zone-based scrolling
 /// - Left/Right edges: Vertical scrolling
 /// - Bottom edge: Horizontal scrolling
@@ -37,6 +41,23 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     /// Enable/disable
     var isEnabled: Bool = false
 
+    /// Acceleration curve type for scrolling
+    var accelerationCurveType: AccelerationCurveType = .linear
+
+    /// Enable corner triggers
+    var cornerTriggerEnabled: Bool = false
+
+    /// Corner trigger zone size (percentage of trackpad)
+    var cornerTriggerZoneSize: CGFloat = 0.15
+
+    /// Corner actions mapping
+    var cornerActions: [ScrollZone: CornerAction] = [
+        .topLeftCorner: .none,
+        .topRightCorner: .none,
+        .bottomLeftCorner: .none,
+        .bottomRightCorner: .none
+    ]
+
     enum VerticalEdgeMode: String, CaseIterable {
         case left = "左側"
         case right = "右側"
@@ -46,6 +67,13 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     enum HorizontalPosition: String, CaseIterable {
         case bottom = "下方"
         case top = "上方"
+    }
+
+    enum AccelerationCurveType: String, CaseIterable {
+        case linear = "線性"
+        case quadratic = "二次"
+        case cubic = "三次"
+        case ease = "緩動"
     }
 
     // MARK: - State
@@ -77,6 +105,19 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         case topEdge
         case middleClick
         case center
+        case topLeftCorner
+        case topRightCorner
+        case bottomLeftCorner
+        case bottomRightCorner
+    }
+
+    enum CornerAction: String, CaseIterable {
+        case none = "無動作"
+        case missionControl = "Mission Control"
+        case appWindows = "應用程式視窗"
+        case showDesktop = "顯示桌面"
+        case launchpad = "啟動台"
+        case notificationCenter = "通知中心"
     }
 
     // MARK: - Singleton
@@ -191,6 +232,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         case 6, 7: // Touch ending/released
             if currentZone == .middleClick {
                 handleMiddleClickTap(endPosition: lastTouchPosition, endTime: timestamp)
+            } else if isCornerZone(currentZone) {
+                handleCornerTap(zone: currentZone, endPosition: lastTouchPosition, endTime: timestamp)
             } else {
                 startInertiaIfNeeded()
             }
@@ -252,6 +295,19 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         // x: 0 = left, 1 = right
         // y: 0 = bottom (near user), 1 = top (away from user)
 
+        // Check corners first (highest priority)
+        if cornerTriggerEnabled {
+            let isLeft = position.x < cornerTriggerZoneSize
+            let isRight = position.x > (1.0 - cornerTriggerZoneSize)
+            let isTop = position.y > (1.0 - cornerTriggerZoneSize)
+            let isBottom = position.y < cornerTriggerZoneSize
+
+            if isTop && isLeft { return .topLeftCorner }
+            if isTop && isRight { return .topRightCorner }
+            if isBottom && isLeft { return .bottomLeftCorner }
+            if isBottom && isRight { return .bottomRightCorner }
+        }
+
         // Calculate middle click zone boundaries
         let middleLeft = (1.0 - middleClickZoneWidth) / 2
         let middleRight = middleLeft + middleClickZoneWidth
@@ -307,7 +363,43 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         return .center
     }
 
+    private func applyAccelerationCurve(_ delta: CGPoint) -> CGPoint {
+        switch accelerationCurveType {
+        case .linear:
+            return delta
+
+        case .quadratic:
+            // Quadratic: delta * |delta| - preserves sign, accelerates larger movements
+            return CGPoint(
+                x: delta.x * abs(delta.x),
+                y: delta.y * abs(delta.y)
+            )
+
+        case .cubic:
+            // Cubic: delta * delta² - even stronger acceleration for large movements
+            return CGPoint(
+                x: delta.x * delta.x * delta.x,
+                y: delta.y * delta.y * delta.y
+            )
+
+        case .ease:
+            // Smoothstep-like easing: smooth transition for small and large movements
+            func smoothstep(_ x: CGFloat) -> CGFloat {
+                let t = min(max(abs(x) * 10, 0), 1) // Normalize to 0-1 range
+                let smooth = t * t * (3 - 2 * t)    // Smoothstep formula
+                return x * (0.5 + smooth * 0.5)     // Scale factor 0.5 to 1.0
+            }
+            return CGPoint(
+                x: smoothstep(delta.x),
+                y: smoothstep(delta.y)
+            )
+        }
+    }
+
     private func handleScroll(delta: CGPoint, zone: ScrollZone) {
+        // Apply acceleration curve to delta
+        let adjustedDelta = applyAccelerationCurve(delta)
+
         var scrollX: Int32 = 0
         var scrollY: Int32 = 0
 
@@ -315,14 +407,15 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         case .leftEdge, .rightEdge:
             // Vertical scrolling - use Y delta
             // Natural scrolling: invert direction (swipe up = content moves up)
-            scrollY = Int32(-delta.y * scrollMultiplier * 100)
+            scrollY = Int32(-adjustedDelta.y * scrollMultiplier * 100)
 
         case .bottomEdge, .topEdge:
             // Horizontal scrolling - use X delta
             // Natural scrolling: invert direction (swipe right = content moves right)
-            scrollX = Int32(-delta.x * scrollMultiplier * 100)
+            scrollX = Int32(-adjustedDelta.x * scrollMultiplier * 100)
 
-        case .center, .none, .middleClick:
+        case .center, .none, .middleClick,
+             .topLeftCorner, .topRightCorner, .bottomLeftCorner, .bottomRightCorner:
             // Normal trackpad behavior - don't intercept
             return
         }
@@ -389,6 +482,112 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         }
 
         NSLog("TrackPal: Middle click triggered")
+    }
+
+    // MARK: - Corner Triggers
+
+    private func isCornerZone(_ zone: ScrollZone) -> Bool {
+        switch zone {
+        case .topLeftCorner, .topRightCorner, .bottomLeftCorner, .bottomRightCorner:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func handleCornerTap(zone: ScrollZone, endPosition: CGPoint, endTime: Double) {
+        let duration = endTime - touchStartTime
+        let movement = hypot(
+            endPosition.x - touchStartPosition.x,
+            endPosition.y - touchStartPosition.y
+        )
+
+        // Check if it's a valid tap (short duration, minimal movement)
+        guard duration < tapMaxDuration && movement < tapMaxMovement else {
+            return
+        }
+
+        // Get the action for this corner
+        guard let action = cornerActions[zone], action != .none else {
+            return
+        }
+
+        executeCornerAction(action)
+    }
+
+    private func executeCornerAction(_ action: CornerAction) {
+        switch action {
+        case .none:
+            break
+
+        case .missionControl:
+            // Use private CoreDock API
+            CoreDockSendNotification("com.apple.expose.awake" as CFString, nil)
+            NSLog("TrackPal: Mission Control triggered")
+
+        case .appWindows:
+            // Use private CoreDock API
+            CoreDockSendNotification("com.apple.expose.front.awake" as CFString, nil)
+            NSLog("TrackPal: App Windows triggered")
+
+        case .showDesktop:
+            // Use private CoreDock API
+            CoreDockSendNotification("com.apple.showdesktop.awake" as CFString, nil)
+            NSLog("TrackPal: Show Desktop triggered")
+
+        case .launchpad:
+            // Open Launchpad app directly
+            NSWorkspace.shared.launchApplication("Launchpad")
+            NSLog("TrackPal: Launchpad triggered")
+
+        case .notificationCenter:
+            // Click on the top-right corner of the screen
+            clickNotificationCenter()
+            NSLog("TrackPal: Notification Center triggered")
+        }
+    }
+
+    private func postKeyboardEvent(keyCode: CGKeyCode, flags: CGEventFlags) {
+        // Key down
+        if let downEvent = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true) {
+            downEvent.flags = flags
+            downEvent.post(tap: .cghidEventTap)
+        }
+
+        // Key up
+        if let upEvent = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false) {
+            upEvent.flags = flags
+            upEvent.post(tap: .cghidEventTap)
+        }
+    }
+
+    private func clickNotificationCenter() {
+        // Click on the top-right corner of the screen (notification center area)
+        guard let screen = NSScreen.main else { return }
+        let screenFrame = screen.frame
+
+        // Notification center is at the top-right, click near the clock area
+        let clickPoint = CGPoint(x: screenFrame.maxX - 20, y: 12) // Near top-right
+
+        // Mouse down
+        if let downEvent = CGEvent(
+            mouseEventSource: nil,
+            mouseType: .leftMouseDown,
+            mouseCursorPosition: clickPoint,
+            mouseButton: .left
+        ) {
+            downEvent.post(tap: .cghidEventTap)
+        }
+
+        // Mouse up
+        if let upEvent = CGEvent(
+            mouseEventSource: nil,
+            mouseType: .leftMouseUp,
+            mouseCursorPosition: clickPoint,
+            mouseButton: .left
+        ) {
+            upEvent.post(tap: .cghidEventTap)
+        }
     }
 }
 

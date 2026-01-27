@@ -82,6 +82,13 @@ final class Settings {
         static let verticalEdgeMode = "verticalEdgeMode"
         static let horizontalPosition = "horizontalPosition"
         static let hasLaunchedBefore = "hasLaunchedBefore"
+        static let accelerationCurveType = "accelerationCurveType"
+        static let cornerTriggerEnabled = "cornerTriggerEnabled"
+        static let cornerTriggerZoneSize = "cornerTriggerZoneSize"
+        static let cornerActionTopLeft = "cornerActionTopLeft"
+        static let cornerActionTopRight = "cornerActionTopRight"
+        static let cornerActionBottomLeft = "cornerActionBottomLeft"
+        static let cornerActionBottomRight = "cornerActionBottomRight"
     }
 
     // Properties with defaults (all features enabled by default)
@@ -140,6 +147,71 @@ final class Settings {
         set { defaults.set(newValue.rawValue, forKey: Keys.horizontalPosition) }
     }
 
+    var accelerationCurveType: TrackpadZoneScroller.AccelerationCurveType {
+        get {
+            guard let raw = defaults.string(forKey: Keys.accelerationCurveType),
+                  let curve = TrackpadZoneScroller.AccelerationCurveType(rawValue: raw) else {
+                return .linear
+            }
+            return curve
+        }
+        set { defaults.set(newValue.rawValue, forKey: Keys.accelerationCurveType) }
+    }
+
+    var cornerTriggerEnabled: Bool {
+        get { defaults.object(forKey: Keys.cornerTriggerEnabled) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: Keys.cornerTriggerEnabled) }
+    }
+
+    var cornerTriggerZoneSize: CGFloat {
+        get { CGFloat(defaults.object(forKey: Keys.cornerTriggerZoneSize) as? Double ?? 0.15) }
+        set { defaults.set(Double(newValue), forKey: Keys.cornerTriggerZoneSize) }
+    }
+
+    var cornerActionTopLeft: TrackpadZoneScroller.CornerAction {
+        get {
+            guard let raw = defaults.string(forKey: Keys.cornerActionTopLeft),
+                  let action = TrackpadZoneScroller.CornerAction(rawValue: raw) else {
+                return .none
+            }
+            return action
+        }
+        set { defaults.set(newValue.rawValue, forKey: Keys.cornerActionTopLeft) }
+    }
+
+    var cornerActionTopRight: TrackpadZoneScroller.CornerAction {
+        get {
+            guard let raw = defaults.string(forKey: Keys.cornerActionTopRight),
+                  let action = TrackpadZoneScroller.CornerAction(rawValue: raw) else {
+                return .none
+            }
+            return action
+        }
+        set { defaults.set(newValue.rawValue, forKey: Keys.cornerActionTopRight) }
+    }
+
+    var cornerActionBottomLeft: TrackpadZoneScroller.CornerAction {
+        get {
+            guard let raw = defaults.string(forKey: Keys.cornerActionBottomLeft),
+                  let action = TrackpadZoneScroller.CornerAction(rawValue: raw) else {
+                return .none
+            }
+            return action
+        }
+        set { defaults.set(newValue.rawValue, forKey: Keys.cornerActionBottomLeft) }
+    }
+
+    var cornerActionBottomRight: TrackpadZoneScroller.CornerAction {
+        get {
+            guard let raw = defaults.string(forKey: Keys.cornerActionBottomRight),
+                  let action = TrackpadZoneScroller.CornerAction(rawValue: raw) else {
+                return .none
+            }
+            return action
+        }
+        set { defaults.set(newValue.rawValue, forKey: Keys.cornerActionBottomRight) }
+    }
+
     private init() {}
 
     func loadSettings() {
@@ -160,6 +232,15 @@ final class Settings {
         scroller.scrollMultiplier = scrollMultiplier
         scroller.verticalEdgeMode = verticalEdgeMode
         scroller.horizontalPosition = horizontalPosition
+        scroller.accelerationCurveType = accelerationCurveType
+        scroller.cornerTriggerEnabled = cornerTriggerEnabled
+        scroller.cornerTriggerZoneSize = cornerTriggerZoneSize
+        scroller.cornerActions = [
+            .topLeftCorner: cornerActionTopLeft,
+            .topRightCorner: cornerActionTopRight,
+            .bottomLeftCorner: cornerActionBottomLeft,
+            .bottomRightCorner: cornerActionBottomRight
+        ]
 
         NSLog("TrackPal: Settings loaded - enabled=\(isEnabled), middleClick=\(middleClickEnabled), launchAtLogin=\(launchAtLogin)")
     }
