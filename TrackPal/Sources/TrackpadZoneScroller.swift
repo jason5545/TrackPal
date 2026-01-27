@@ -1229,6 +1229,7 @@ final class ScrollEventInterceptor: @unchecked Sendable {
         guard !isRunning else { return }
 
         let eventMask: CGEventMask = (1 << CGEventType.scrollWheel.rawValue)
+            | (1 << CGEventType.mouseMoved.rawValue)
 
         // Create event tap at HID level (same as where we post events)
         eventTap = CGEvent.tapCreate(
@@ -1313,7 +1314,15 @@ private func scrollInterceptorCallback(
         return Unmanaged.passUnretained(event)
     }
 
-    // Only handle scroll wheel events
+    // Suppress cursor movement during active zone scrolling
+    if type == .mouseMoved {
+        if TrackpadZoneScroller.shared.isActivelyScrollingInZone {
+            return nil
+        }
+        return Unmanaged.passUnretained(event)
+    }
+
+    // Only handle scroll wheel events beyond this point
     guard type == .scrollWheel else {
         return Unmanaged.passUnretained(event)
     }
