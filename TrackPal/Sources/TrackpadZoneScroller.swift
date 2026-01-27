@@ -109,7 +109,6 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private var lastTouchPosition: CGPoint = .zero
     private var currentZone: ScrollZone = .none
     private var isTracking: Bool = false
-    private var touchCount: Int = 0
 
     // Concurrent touch detection state
     private var currentGestureMode: GestureMode = .idle
@@ -415,14 +414,13 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         let y = position.y
         let x = position.x
 
-        // Near bottom zone boundary
-        let bottomBound = bottomZoneHeight
-        if y > (bottomBound - boundaryMargin) && y < (bottomBound + boundaryMargin) {
-            return true
-        }
-
-        // Near top zone boundary (if horizontal position is top)
-        if horizontalPosition == .top {
+        // Near horizontal zone boundary (only check the active side)
+        if horizontalPosition == .bottom {
+            let bottomBound = bottomZoneHeight
+            if y > (bottomBound - boundaryMargin) && y < (bottomBound + boundaryMargin) {
+                return true
+            }
+        } else {
             let topBound = 1.0 - bottomZoneHeight
             if y > (topBound - boundaryMargin) && y < (topBound + boundaryMargin) {
                 return true
@@ -868,28 +866,13 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             LogManager.shared.log("Show Desktop triggered")
 
         case .launchpad:
-            // Open Launchpad app directly
-            NSWorkspace.shared.launchApplication("Launchpad")
+            NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Launchpad.app"))
             LogManager.shared.log("Launchpad triggered")
 
         case .notificationCenter:
             // Click on the top-right corner of the screen
             clickNotificationCenter()
             LogManager.shared.log("Notification Center triggered")
-        }
-    }
-
-    private func postKeyboardEvent(keyCode: CGKeyCode, flags: CGEventFlags) {
-        // Key down
-        if let downEvent = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true) {
-            downEvent.flags = flags
-            downEvent.post(tap: .cghidEventTap)
-        }
-
-        // Key up
-        if let upEvent = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false) {
-            upEvent.flags = flags
-            upEvent.post(tap: .cghidEventTap)
         }
     }
 
@@ -925,10 +908,23 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
 // MARK: - C Callback with Refcon
 
-/// Track previous finger count for transition detection
-nonisolated(unsafe) private var previousFingerCount: Int32 = 0
-/// Diagnostic: log touch values once for calibration
-nonisolated(unsafe) private var hasLoggedTouchValues: Bool = false
+/// Thread-safe storage for callback state shared across device callbacks
+/// Using os_unfair_lock for synchronization — @unchecked Sendable because we handle safety manually
+private final class CallbackState: @unchecked Sendable {
+    static let shared = CallbackState()
+    private var lock = os_unfair_lock()
+    private var _previousFingerCount: Int32 = 0
+    private var _hasLoggedTouchValues: Bool = false
+
+    var previousFingerCount: Int32 {
+        get { os_unfair_lock_lock(&lock); defer { os_unfair_lock_unlock(&lock) }; return _previousFingerCount }
+        set { os_unfair_lock_lock(&lock); _previousFingerCount = newValue; os_unfair_lock_unlock(&lock) }
+    }
+    var hasLoggedTouchValues: Bool {
+        get { os_unfair_lock_lock(&lock); defer { os_unfair_lock_unlock(&lock) }; return _hasLoggedTouchValues }
+        set { os_unfair_lock_lock(&lock); _hasLoggedTouchValues = newValue; os_unfair_lock_unlock(&lock) }
+    }
+}
 
 private func touchCallbackWithRefcon(
     device: MTDeviceRef?,
@@ -942,8 +938,8 @@ private func touchCallbackWithRefcon(
 
     let scroller = TrackpadZoneScroller.shared
     let touchCount = Int(numTouches)
-    let prevCount = Int(previousFingerCount)
-    previousFingerCount = numTouches
+    let prevCount = Int(CallbackState.shared.previousFingerCount)
+    CallbackState.shared.previousFingerCount = numTouches
 
     // Only process single-finger touches for zone scrolling
     if numTouches == 1 {
@@ -951,8 +947,8 @@ private func touchCallbackWithRefcon(
         let ts = timestamp
 
         // Diagnostic: log actual MTTouch values for threshold calibration
-        if !hasLoggedTouchValues && touch.state >= 4 {
-            hasLoggedTouchValues = true
+        if !CallbackState.shared.hasLoggedTouchValues && touch.state >= 4 {
+            CallbackState.shared.hasLoggedTouchValues = true
             LogManager.shared.log(String(format: "[DIAG] MTTouch values - density=%.4f, majorAxis=%.4f, minorAxis=%.4f, size=%.4f, angle=%.4f, state=%d", touch.density, touch.majorAxis, touch.minorAxis, touch.size, touch.angle, touch.state))
         }
 

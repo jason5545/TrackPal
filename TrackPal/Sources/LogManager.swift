@@ -26,14 +26,13 @@ final class LogManager: @unchecked Sendable {
 
     /// Log a message to file and system console
     func log(_ message: String) {
-        let timestamp = dateFormatter.string(from: Date())
-        let line = "[\(timestamp)] \(message)\n"
-
-        // System log
+        // System log (thread-safe by itself)
         NSLog("TrackPal: %@", message)
 
-        // File log (async to avoid blocking)
-        queue.async { [logFileURL] in
+        // File log (async to avoid blocking; formatting inside queue for thread safety)
+        queue.async { [logFileURL, dateFormatter] in
+            let timestamp = dateFormatter.string(from: Date())
+            let line = "[\(timestamp)] \(message)\n"
             if let data = line.data(using: .utf8),
                let handle = try? FileHandle(forWritingTo: logFileURL) {
                 handle.seekToEndOfFile()

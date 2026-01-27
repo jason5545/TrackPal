@@ -74,7 +74,7 @@ final class InertiaScroller {
 
             let scroller = Unmanaged<InertiaScroller>.fromOpaque(userInfo).takeUnretainedValue()
 
-            Task { @MainActor in
+            DispatchQueue.main.async {
                 scroller.updateInertia()
             }
 
