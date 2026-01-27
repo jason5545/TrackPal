@@ -153,6 +153,9 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private var activationOriginalZone: ScrollZone = .none  // original zone before promotion
     private var activationFrames: [(x: CGFloat, y: CGFloat)] = []
     private var activationDeltas: [CGPoint] = []
+    private var activationDensities: [Float] = []  // density per delta frame
+    private var activationConfidence: CGFloat = 0   // Bayesian confidence for horizontal zones
+    private var currentTouchDensity: Float = 0      // latest density from processFilteredTouch
     private let activationFramesNeeded = 2
     private let activationMaxFrames = 5           // max wait when barely moving
     private let directionCoherenceThreshold: CGFloat = 0.40
@@ -293,6 +296,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                     activationOriginalZone = preliminaryZone
                     activationFrames = [(x: position.x, y: position.y)]
                     activationDeltas = []
+                    activationDensities = []
+                    activationConfidence = computeZonePrior(zone: preliminaryZone, position: position)
                     // Suppress system scroll events during activation evaluation
                     // to prevent cursor movement before scroll starts
                     isActivelyScrollingInZone = true
@@ -304,6 +309,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                     activationOriginalZone = preliminaryZone
                     activationFrames = [(x: position.x, y: position.y)]
                     activationDeltas = []
+                    activationDensities = []
+                    activationConfidence = 0  // will be set after corner promotion
                     isActivelyScrollingInZone = true
                     LogManager.shared.log(String(format: "Touch started at (%.2f, %.2f) zone: \(preliminaryZone) [CORNER-PENDING]", x, y))
                 } else {
@@ -338,10 +345,11 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                     // finger is only partially on the trackpad surface.
                     if activationFrames.count > 1 {
                         activationDeltas.append(delta)
+                        activationDensities.append(currentTouchDensity)
                     }
 
-                    // Need activationFramesNeeded deltas (first frame is skipped)
-                    if activationDeltas.count >= activationFramesNeeded {
+                    // Evaluate from the first usable delta frame onward
+                    if activationDeltas.count >= 1 {
                         let result = evaluateScrollIntent()
                         switch result {
                         case .activated:
@@ -359,6 +367,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                         case .rejected:
                             isScrollActivationPending = false
                             activationDeltas.removeAll()
+                            activationDensities.removeAll()
+                            activationConfidence = 0
                             isActivelyScrollingInZone = false  // Release suppression
                             if isCornerZone(activationOriginalZone) {
                                 // Restore corner zone so tap handler can still fire on lift-off
@@ -374,6 +384,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                             if activationFrames.count >= activationMaxFrames {
                                 isScrollActivationPending = false
                                 activationDeltas.removeAll()
+                                activationDensities.removeAll()
+                                activationConfidence = 0
                                 isActivelyScrollingInZone = false  // Release suppression
                                 if isCornerZone(activationOriginalZone) {
                                     currentZone = activationOriginalZone
@@ -463,6 +475,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         activationOriginalZone = .none
         activationFrames.removeAll()
         activationDeltas.removeAll()
+        activationDensities.removeAll()
+        activationConfidence = 0
         velocityHistory.removeAll()
         scrollAccumulatorX = 0
         scrollAccumulatorY = 0
@@ -559,96 +573,115 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
             currentZone = promotedZone
             LogManager.shared.log("Corner promoted → \(promotedZone)")
+
+            // Initialize Bayesian prior for the promoted zone
+            if let startPos = activationFrames.first {
+                let pos = CGPoint(x: startPos.x, y: startPos.y)
+                activationConfidence = computeZonePrior(zone: promotedZone, position: pos)
+            }
             // Fall through to normal scroll evaluation with the new zone
         }
 
-        // --- Normal scroll zone evaluation ---
-        // Compensate for trackpad aspect ratio (~1.6:1 width:height).
-        let aspectRatio: CGFloat = 1.6
-        let totalDx: CGFloat
-        let totalDy: CGFloat
-        switch currentZone {
+        // --- All scroll zones use Bayesian confidence model ---
+        return evaluateScrollIntentBayesian()
+    }
+
+    /// Check if a zone is a horizontal scroll zone
+    private func isHorizontalZone(_ zone: ScrollZone) -> Bool {
+        switch zone {
         case .bottomEdge, .topEdge:
-            totalDx = totalRawDx * aspectRatio
-            totalDy = totalRawDy
-        case .leftEdge, .rightEdge:
-            totalDx = totalRawDx
-            totalDy = totalRawDy * aspectRatio
+            return true
         default:
-            totalDx = totalRawDx
-            totalDy = totalRawDy
+            return false
         }
+    }
 
-        let totalMovement = totalDx + totalDy
+    /// Compute initial Bayesian prior from how deep the touch is within the zone
+    private func computeZonePrior(zone: ScrollZone, position: CGPoint) -> CGFloat {
+        let basePrior: CGFloat = 0.50
+        let priorRange: CGFloat = 0.35  // max additional prior from zone depth
 
-        if totalMovement < minActivationMovement {
-            return .needMoreFrames
-        }
-
-        // Determine if the touch started near the physical sensor edge.
-        // Sensor readings are inherently noisier at the very edge of the
-        // trackpad, so we use a more lenient coherence threshold there.
-        let startPos = activationFrames.first!
-        let isNearPhysicalEdge: Bool
-        switch currentZone {
+        let depth: CGFloat
+        switch zone {
         case .bottomEdge:
-            isNearPhysicalEdge = startPos.y < 0.10
+            depth = max(0, bottomZoneHeight - position.y) / bottomZoneHeight
         case .topEdge:
-            isNearPhysicalEdge = startPos.y > 0.90
+            depth = max(0, position.y - (1.0 - bottomZoneHeight)) / bottomZoneHeight
         case .leftEdge:
-            isNearPhysicalEdge = startPos.x < 0.10
+            depth = max(0, edgeZoneWidth - position.x) / edgeZoneWidth
         case .rightEdge:
-            isNearPhysicalEdge = startPos.x > 0.90
+            depth = max(0, position.x - (1.0 - edgeZoneWidth)) / edgeZoneWidth
         default:
-            isNearPhysicalEdge = false
+            depth = 0
         }
-        // Corners are always at the sensor edge
-        let isFromCorner = isNearPhysicalEdge || activationFrames.first.map { f in
-            f.x < cornerTriggerZoneSize || f.x > (1.0 - cornerTriggerZoneSize)
-        } ?? false
+        return basePrior + depth * priorRange  // range: 0.50 ~ 0.85
+    }
 
-        let effectiveThreshold = (isNearPhysicalEdge || isFromCorner)
-            ? directionCoherenceThreshold * 0.6  // ~0.24: lenient at sensor edge / corner
-            : directionCoherenceThreshold         // 0.40: normal
+    /// Bayesian confidence evaluation for horizontal zones (bottomEdge/topEdge)
+    private func evaluateScrollIntentBayesian() -> ScrollIntentResult {
+        guard !activationDeltas.isEmpty else { return .needMoreFrames }
 
-        // Check direction coherence
-        let directionPasses: Bool
+        // Use the latest delta for this frame's evidence
+        let delta = activationDeltas.last!
+        let density = activationDensities.last ?? 0.05
+
+        // --- Quality weight from density ---
+        // Low density (edge touches) = unreliable direction data
+        // qualityWeight: 0.3 (density=0.02) to 1.0 (density>=0.10)
+        let qualityWeight = CGFloat(min(max((density - 0.02) / 0.08, 0.0), 1.0)) * 0.7 + 0.3
+
+        // --- Direction evidence ---
+        // Compute on-axis ratio with aspect ratio compensation
+        let absDx = abs(delta.x) * 1.6  // aspect compensation
+        let absDy = abs(delta.y)
+        let total = absDx + absDy
+        guard total > 0.0005 else {
+            // Movement too small to determine direction — no update
+            return activationConfidence >= 0.85 ? .activated : .needMoreFrames
+        }
+
+        let onAxisRatio: CGFloat  // how much movement is on the expected scroll axis
         switch currentZone {
-        case .leftEdge, .rightEdge:
-            let ratio = totalDy / totalMovement
-            directionPasses = ratio >= effectiveThreshold
         case .bottomEdge, .topEdge:
-            let ratio = totalDx / totalMovement
-            directionPasses = ratio >= effectiveThreshold
+            onAxisRatio = absDx / total
         default:
-            return .rejected
+            onAxisRatio = absDy / total
         }
 
-        if !directionPasses {
-            return .rejected
+        // Direction boost: positive when on-axis dominant, negative when off-axis
+        let directionBoost: CGFloat
+        if onAxisRatio >= 0.5 {
+            directionBoost = (onAxisRatio - 0.5) * 0.50  // max +0.25
+        } else {
+            directionBoost = (onAxisRatio - 0.5) * 0.60  // max -0.30 (stronger penalty)
         }
 
-        // Check on-axis velocity
-        guard !velocityHistory.isEmpty else { return .needMoreFrames }
-
-        var avgOnAxis: CGFloat = 0
-        for v in velocityHistory {
-            switch currentZone {
-            case .leftEdge, .rightEdge:
-                avgOnAxis += abs(v.vy)
-            case .bottomEdge, .topEdge:
-                avgOnAxis += abs(v.vx)
-            default:
-                break
-            }
+        // --- Velocity evidence ---
+        let latestV = velocityHistory.last
+        let onAxisSpeed: CGFloat
+        switch currentZone {
+        case .bottomEdge, .topEdge:
+            onAxisSpeed = abs(latestV?.vx ?? 0)
+        default:
+            onAxisSpeed = abs(latestV?.vy ?? 0)
         }
-        avgOnAxis /= CGFloat(velocityHistory.count)
+        let velocityBoost: CGFloat
+        if onAxisSpeed > 0.30      { velocityBoost = 0.10 }
+        else if onAxisSpeed > 0.15 { velocityBoost = 0.05 }
+        else if onAxisSpeed > 0.05 { velocityBoost = 0.02 }
+        else                       { velocityBoost = -0.03 }
 
-        if avgOnAxis < minActivationVelocity {
-            return .needMoreFrames
-        }
+        // --- Update confidence ---
+        activationConfidence += (directionBoost + velocityBoost) * qualityWeight
+        activationConfidence = min(max(activationConfidence, 0.0), 1.0)
 
-        return .activated
+        LogManager.shared.log(String(format: "Bayesian confidence=%.3f (dir=%.3f vel=%.3f qw=%.2f density=%.3f)",
+            activationConfidence, directionBoost, velocityBoost, qualityWeight, density))
+
+        // --- Decision ---
+        if activationConfidence >= 0.85 { return .activated }
+        if activationConfidence <= 0.20 { return .rejected }
+        return .needMoreFrames
     }
 
     /// Check if a zone is a scroll zone (edges that produce scroll events)
@@ -739,6 +772,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
         switch result {
         case .valid:
+            currentTouchDensity = density
             processTouch(x: x, y: y, state: state, timestamp: timestamp)
 
         case .tooLight:
