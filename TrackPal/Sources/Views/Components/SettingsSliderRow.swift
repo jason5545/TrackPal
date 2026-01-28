@@ -7,8 +7,33 @@ struct SettingsSliderRow: View {
     @Binding var value: Double
     let range: ClosedRange<Double>
     let format: (Double) -> String
+    var icon: String? = nil
+    var iconColor: Color = DesignTokens.Colors.accentPrimary
 
     var body: some View {
+        if let icon {
+            SettingsRowView(
+                icon: icon,
+                iconColor: iconColor,
+                title: title
+            ) {
+                HStack(spacing: DesignTokens.Spacing.xs) {
+                    Slider(value: $value, in: range)
+                        .tint(DesignTokens.Colors.accentPrimary)
+                        .frame(width: 70)
+
+                    Text(format(value))
+                        .font(DesignTokens.Typography.percentage)
+                        .foregroundStyle(DesignTokens.Colors.textSecondary)
+                        .frame(width: 36, alignment: .trailing)
+                }
+            }
+        } else {
+            sliderContent
+        }
+    }
+
+    private var sliderContent: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
             HStack {
                 Text(title)
@@ -38,17 +63,11 @@ struct SettingsSliderRow: View {
         )
 
         SettingsSliderRow(
-            title: "下方區域高度",
-            value: .constant(0.20),
-            range: 0.10...0.40,
-            format: { "\(Int($0 * 100))%" }
-        )
-
-        SettingsSliderRow(
-            title: "捲動靈敏度",
-            value: .constant(3.0),
-            range: 1.0...10.0,
-            format: { String(format: "%.1fx", $0) }
+            title: "邊緣寬度",
+            value: .constant(0.15),
+            range: 0.05...0.30,
+            format: { "\(Int($0 * 100))%" },
+            icon: "ruler"
         )
     }
     .padding()

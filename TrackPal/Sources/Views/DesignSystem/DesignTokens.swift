@@ -44,6 +44,7 @@ enum DesignTokens {
         static let body = Font.system(size: 13, weight: .regular)
         static let caption = Font.system(size: 11, weight: .regular)
         static let percentage = Font.system(size: 11, weight: .medium, design: .monospaced)
+        static let sectionHeaderTracking: CGFloat = 1.2
     }
 
     // MARK: - Spacing
@@ -67,6 +68,7 @@ enum DesignTokens {
         static let buttonRadius: CGFloat = 6
         static let sliderHeight: CGFloat = 4
         static let iconSize: CGFloat = 20
+        static let settingsIconWidth: CGFloat = 20
         static let minTouchTarget: CGFloat = 24
         static let trackpadDiagramHeight: CGFloat = 100
     }
@@ -77,5 +79,6 @@ enum DesignTokens {
         static let quick = SwiftUI.Animation.spring(response: 0.2, dampingFraction: 0.85)
         static let hover = SwiftUI.Animation.easeOut(duration: 0.12)
         static let standard = SwiftUI.Animation.spring(response: 0.35, dampingFraction: 0.85)
+        static let pageTransition = SwiftUI.Animation.spring(response: 0.4, dampingFraction: 0.88)
     }
 }
