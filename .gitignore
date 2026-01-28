@@ -34,6 +34,7 @@ xcuserdata/
 *.tmp
 *.temp
 CLAUDE.md
+AI_HANDOFF.md
 PLAN-*.md
 *.png
 !TrackPal/Resources/Assets.xcassets/**/*.png

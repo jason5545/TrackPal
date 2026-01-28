@@ -210,6 +210,75 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     /// Counter for persistence throttling (save every 20 learning events)
     private var learningEventCount: Int = 0
 
+    // MARK: - False Activation Learning
+
+    /// Records of recent scroll sessions for false activation detection
+    private var scrollSessionHistory: [ScrollSessionRecord] = []
+    private let maxSessionHistorySize = 50
+
+    /// Thresholds for false activation detection (will be learned)
+    private var falseActivationThresholds: [ScrollZone: FalseActivationThreshold] = [:]
+
+    /// Current active scroll session (for tracking duration and distance)
+    private var currentScrollSession: ScrollSessionRecord?
+
+    /// Structure to record a scroll session
+    struct ScrollSessionRecord {
+        let zone: ScrollZone
+        let startTime: Double
+        var endTime: Double?
+        var totalDistance: CGFloat = 0
+        var maxVelocity: CGFloat = 0
+        var directionChanges: Int = 0
+        var wasCancelled: Bool = false
+        var activationData: ActivationData
+
+        struct ActivationData {
+            let onAxisRatio: CGFloat
+            let offAxisSpeed: CGFloat
+            let onAxisSpeed: CGFloat
+            let density: Float
+            let confidence: CGFloat
+        }
+
+        var duration: Double {
+            guard let end = endTime else { return 0 }
+            return end - startTime
+        }
+
+        var isFalseActivation: Bool {
+            // Short duration (< 300ms) and short distance (< 0.05) indicates false activation
+            return duration < 0.3 && totalDistance < 0.05 && !wasCancelled
+        }
+    }
+
+    /// Learned thresholds for false activation detection per zone
+    struct FalseActivationThreshold {
+        var minDuration: Double = 0.3
+        var minDistance: CGFloat = 0.05
+        var minOnAxisRatio: CGFloat = 0.35
+        var maxOffAxisRatio: CGFloat = 0.65
+        var sampleCount: Int = 0
+
+        /// Update thresholds based on false positive patterns
+        mutating func learnFromFalseActivation(_ session: ScrollSessionRecord) {
+            sampleCount += 1
+            let alpha = min(CGFloat(sampleCount) / 100.0, 0.1) // Learning rate capped at 0.1
+
+            // If this was a false activation, tighten thresholds
+            if session.isFalseActivation {
+                minDuration = minDuration * (1.0 + alpha * 0.1) // Increase min duration slightly
+                minDistance = minDistance * (1.0 + alpha * 0.1) // Increase min distance slightly
+                minOnAxisRatio = min(minOnAxisRatio * (1.0 + alpha * 0.05), 0.5) // Increase min ratio, cap at 0.5
+            } else {
+                // Successful scroll - loosen thresholds slightly (but not below defaults)
+                minDuration = max(minDuration * (1.0 - alpha * 0.02), 0.2)
+                minDistance = max(minDistance * (1.0 - alpha * 0.02), 0.03)
+                minOnAxisRatio = max(minOnAxisRatio * (1.0 - alpha * 0.01), 0.3)
+            }
+        }
+    }
+
     enum ZoneCategory {
         case none, horizontal, vertical
     }
@@ -536,6 +605,11 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     }
 
     func resetTracking() {
+        // Finalize any active scroll session before resetting
+        if currentScrollSession != nil {
+            finalizeScrollSession(wasCancelled: false)
+        }
+
         isTracking = false
         currentZone = .none
         isScrollActivationPending = false
@@ -860,12 +934,142 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             retryBonusV *= 0.995
         }
 
+        // Start tracking this scroll session for false activation detection
+        startScrollSessionTracking()
+
         // Persistence throttle
         learningEventCount += 1
         if learningEventCount >= 20 {
             saveAdaptiveState()
             learningEventCount = 0
         }
+    }
+
+    // MARK: - False Activation Detection Methods
+
+    /// Start tracking a new scroll session when activation succeeds
+    private func startScrollSessionTracking() {
+        guard isScrollZone(currentZone) else { return }
+
+        // Calculate activation metrics
+        let absDx = activationDeltas.last?.x ?? 0
+        let absDy = activationDeltas.last?.y ?? 0
+        let totalDx = activationDeltas.reduce(0) { $0 + abs($1.x) } * 1.6
+        let totalDy = activationDeltas.reduce(0) { $0 + abs($1.y) }
+        let total = totalDx + totalDy
+
+        let onAxisRatio: CGFloat
+        let offAxisSpeed: CGFloat
+        let onAxisSpeed: CGFloat
+
+        if isHorizontalZone(currentZone) {
+            onAxisRatio = total > 0 ? totalDx / total : 0.5
+            onAxisSpeed = abs(velocityHistory.last?.vx ?? 0)
+            offAxisSpeed = abs(velocityHistory.last?.vy ?? 0)
+        } else {
+            onAxisRatio = total > 0 ? totalDy / total : 0.5
+            onAxisSpeed = abs(velocityHistory.last?.vy ?? 0)
+            offAxisSpeed = abs(velocityHistory.last?.vx ?? 0)
+        }
+
+        let activationData = ScrollSessionRecord.ActivationData(
+            onAxisRatio: onAxisRatio,
+            offAxisSpeed: offAxisSpeed,
+            onAxisSpeed: onAxisSpeed,
+            density: activationDensities.last ?? 0.05,
+            confidence: activationConfidence
+        )
+
+        currentScrollSession = ScrollSessionRecord(
+            zone: currentZone,
+            startTime: CACurrentMediaTime(),
+            activationData: activationData
+        )
+
+        LogManager.shared.log(String(format: "Started tracking scroll session in %@ (onAxisRatio=%.3f)",
+            String(describing: currentZone), onAxisRatio))
+    }
+
+    /// Update the current scroll session with movement data
+    func updateScrollSession(delta: CGPoint) {
+        guard var session = currentScrollSession else { return }
+
+        let distance = hypot(delta.x, delta.y)
+        session.totalDistance += distance
+
+        // Track max velocity
+        let currentVel = hypot(velocityHistory.last?.vx ?? 0, velocityHistory.last?.vy ?? 0)
+        session.maxVelocity = max(session.maxVelocity, currentVel)
+
+        // Track direction changes (simplified)
+        if activationDeltas.count >= 2 {
+            let prevDelta = activationDeltas[activationDeltas.count - 2]
+            let dotProduct = (delta.x * prevDelta.x) + (delta.y * prevDelta.y)
+            if dotProduct < 0 {
+                session.directionChanges += 1
+            }
+        }
+
+        currentScrollSession = session
+    }
+
+    /// Finalize the current scroll session and learn from it
+    private func finalizeScrollSession(wasCancelled: Bool = false) {
+        guard var session = currentScrollSession else { return }
+
+        session.endTime = CACurrentMediaTime()
+        session.wasCancelled = wasCancelled
+
+        // Add to history
+        scrollSessionHistory.append(session)
+        if scrollSessionHistory.count > maxSessionHistorySize {
+            scrollSessionHistory.removeFirst()
+        }
+
+        // Learn from this session
+        learnFromScrollSession(session)
+
+        // Log results
+        if session.isFalseActivation {
+            LogManager.shared.log(String(format: "⚠️ False activation detected: zone=%@, duration=%.3fs, distance=%.4f",
+                String(describing: session.zone), session.duration, session.totalDistance))
+        } else {
+            LogManager.shared.log(String(format: "✓ Valid scroll session: zone=%@, duration=%.3fs, distance=%.4f",
+                String(describing: session.zone), session.duration, session.totalDistance))
+        }
+
+        currentScrollSession = nil
+    }
+
+    /// Learn from scroll session history to adjust thresholds
+    private func learnFromScrollSession(_ session: ScrollSessionRecord) {
+        // Get or create threshold for this zone
+        var threshold = falseActivationThresholds[session.zone] ?? FalseActivationThreshold()
+
+        // Update threshold based on session data
+        threshold.learnFromFalseActivation(session)
+
+        // Store updated threshold
+        falseActivationThresholds[session.zone] = threshold
+
+        // Log learning progress periodically
+        if scrollSessionHistory.count % 10 == 0 {
+            LogManager.shared.log(String(format: "📊 Learned thresholds for %@: minDuration=%.3f, minDistance=%.4f, minOnAxisRatio=%.3f (samples=%d)",
+                String(describing: session.zone), threshold.minDuration, threshold.minDistance, threshold.minOnAxisRatio, threshold.sampleCount))
+        }
+    }
+
+    /// Check if current activation data might be a false activation based on learned thresholds
+    func isLikelyFalseActivation() -> Bool {
+        guard let session = currentScrollSession else { return false }
+        guard let threshold = falseActivationThresholds[session.zone] else { return false }
+
+        // Quick check based on learned thresholds
+        if session.activationData.onAxisRatio < threshold.minOnAxisRatio {
+            return true
+        }
+
+        return false
     }
 
     /// Record a missed scroll (rejection or timeout)
@@ -1020,6 +1224,12 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             InertiaScroller.shared.stopInertia()
         }
         isActivelyScrollingInZone = false
+
+        // Mark session as cancelled before resetting
+        if currentScrollSession != nil {
+            finalizeScrollSession(wasCancelled: true)
+        }
+
         resetTracking()
     }
 
@@ -1210,6 +1420,9 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     }
 
     private func handleScroll(delta: CGPoint, zone: ScrollZone) {
+        // Update scroll session tracking
+        updateScrollSession(delta: delta)
+
         // Apply acceleration curve to delta
         let adjustedDelta = applyAccelerationCurve(delta)
 
