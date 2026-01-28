@@ -168,6 +168,28 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private let tapMaxDuration: Double = 0.3      // 300ms
     private let tapMaxMovement: CGFloat = 0.05    // 5% of trackpad
 
+    // MARK: - Adaptive Bayesian Tuning State
+
+    /// Learned direction center (EMA of on-axis ratios from successful activations)
+    private var learnedDirectionCenterH: CGFloat = 0.50
+    private var learnedDirectionCenterV: CGFloat = 0.50
+    private let directionDeadZone: CGFloat = 0.05
+    private var onAxisRatioBuffer: [(isHorizontal: Bool, ratio: CGFloat)] = []
+
+    /// Retry detection: tracks missed scrolls and immediate retries
+    private var lastMissZoneCategory: ZoneCategory = .none
+    private var lastMissTimestamp: Double = 0
+    private var retryCountH: Int = 0, missCountH: Int = 0
+    private var retryCountV: Int = 0, missCountV: Int = 0
+    private var retryBonusH: CGFloat = 0.0, retryBonusV: CGFloat = 0.0
+
+    /// Counter for persistence throttling (save every 20 learning events)
+    private var learningEventCount: Int = 0
+
+    enum ZoneCategory {
+        case none, horizontal, vertical
+    }
+
     enum ScrollZone {
         case none
         case leftEdge
@@ -291,6 +313,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 currentZone = preliminaryZone
 
                 if isScrollZone(preliminaryZone) {
+                    // Check if this is a retry after a recent miss
+                    checkForRetry(zone: preliminaryZone)
                     // All scroll zone touches enter activation pending
                     isScrollActivationPending = true
                     activationOriginalZone = preliminaryZone
@@ -353,6 +377,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                         let result = evaluateScrollIntent()
                         switch result {
                         case .activated:
+                            recordSuccessfulActivation()
                             isScrollActivationPending = false
                             // Flush buffered deltas with graduated ramp-up to avoid jump
                             let count = activationDeltas.count
@@ -365,6 +390,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                             LogManager.shared.log("Scroll activated: \(currentZone)")
 
                         case .rejected:
+                            recordActivationFailure()
                             isScrollActivationPending = false
                             activationDeltas.removeAll()
                             activationDensities.removeAll()
@@ -382,6 +408,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                         case .needMoreFrames:
                             // Keep waiting, but enforce upper limit
                             if activationFrames.count >= activationMaxFrames {
+                                recordActivationFailure()
                                 isScrollActivationPending = false
                                 activationDeltas.removeAll()
                                 activationDensities.removeAll()
@@ -650,11 +677,18 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         }
 
         // Direction boost: positive when on-axis dominant, negative when off-axis
+        // Uses learned direction center (adaptive) instead of hardcoded 0.50
+        let center = isHorizontalZone(currentZone) ? learnedDirectionCenterH : learnedDirectionCenterV
+        let deviation = onAxisRatio - center
         let directionBoost: CGFloat
-        if onAxisRatio >= 0.5 {
-            directionBoost = (onAxisRatio - 0.5) * 0.55  // max +0.275
+        if abs(deviation) <= directionDeadZone {
+            directionBoost = 0.0  // dead zone — no boost
+        } else if deviation > directionDeadZone {
+            // Positive boost: linear from dead zone edge to max
+            directionBoost = (deviation - directionDeadZone) / (1.0 - center - directionDeadZone) * 0.275
         } else {
-            directionBoost = (onAxisRatio - 0.5) * 0.50  // max -0.25 (symmetric with positive)
+            // Negative boost: linear from dead zone edge to max negative
+            directionBoost = (deviation + directionDeadZone) / (center - directionDeadZone) * 0.25
         }
 
         // --- Velocity evidence ---
@@ -678,13 +712,204 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         activationConfidence += max(update, -0.20)
         activationConfidence = min(max(activationConfidence, 0.0), 1.0)
 
-        LogManager.shared.log(String(format: "Bayesian confidence=%.3f (dir=%.3f vel=%.3f qw=%.2f density=%.3f)",
-            activationConfidence, directionBoost, velocityBoost, qualityWeight, density))
+        // --- Effective threshold with retry bonus ---
+        let retryBonus = isHorizontalZone(currentZone) ? retryBonusH : retryBonusV
+        let effectiveThreshold = max(0.75 - retryBonus, 0.67)
+
+        LogManager.shared.log(String(format: "Bayesian confidence=%.3f (dir=%.3f vel=%.3f qw=%.2f density=%.3f center=%.3f thresh=%.3f)",
+            activationConfidence, directionBoost, velocityBoost, qualityWeight, density, center, effectiveThreshold))
 
         // --- Decision ---
-        if activationConfidence >= 0.75 { return .activated }
+        if activationConfidence >= effectiveThreshold { return .activated }
         if activationConfidence <= 0.20 { return .rejected }
         return .needMoreFrames
+    }
+
+    // MARK: - Adaptive Learning Methods
+
+    /// Categorize a scroll zone as horizontal, vertical, or none
+    private func zoneCategory(for zone: ScrollZone) -> ZoneCategory {
+        switch zone {
+        case .bottomEdge, .topEdge:
+            return .horizontal
+        case .leftEdge, .rightEdge:
+            return .vertical
+        default:
+            return .none
+        }
+    }
+
+    /// Record a successful scroll activation — updates direction center EMA and retry bonus
+    private func recordSuccessfulActivation() {
+        let isH = isHorizontalZone(currentZone)
+
+        // Collect on-axis ratios from activation deltas for direction center EMA
+        for (index, delta) in activationDeltas.enumerated() {
+            let absDx = abs(delta.x) * 1.6
+            let absDy = abs(delta.y)
+            let total = absDx + absDy
+            guard total > 0.0005 else { continue }
+
+            let ratio: CGFloat
+            if isH {
+                ratio = absDx / total
+            } else {
+                ratio = absDy / total
+            }
+            onAxisRatioBuffer.append((isHorizontal: isH, ratio: ratio))
+        }
+
+        // Flush EMA periodically (every 5 samples)
+        let samplesForType = onAxisRatioBuffer.filter { $0.isHorizontal == isH }
+        if samplesForType.count >= 5 {
+            let alpha: CGFloat = 0.02
+            for sample in samplesForType {
+                if sample.isHorizontal {
+                    learnedDirectionCenterH += alpha * (sample.ratio - learnedDirectionCenterH)
+                    learnedDirectionCenterH = min(max(learnedDirectionCenterH, 0.40), 0.55)
+                } else {
+                    learnedDirectionCenterV += alpha * (sample.ratio - learnedDirectionCenterV)
+                    learnedDirectionCenterV = min(max(learnedDirectionCenterV, 0.40), 0.55)
+                }
+            }
+            onAxisRatioBuffer.removeAll { $0.isHorizontal == isH }
+            LogManager.shared.log(String(format: "Direction center EMA: H=%.4f V=%.4f", learnedDirectionCenterH, learnedDirectionCenterV))
+        }
+
+        // Check if this activation was a retry (touch started soon after a miss in same zone)
+        let cat = zoneCategory(for: currentZone)
+        if cat == lastMissZoneCategory && lastMissTimestamp > 0 {
+            let elapsed = CACurrentMediaTime() - lastMissTimestamp
+            if elapsed < 2.0 {
+                if cat == .horizontal {
+                    retryCountH += 1
+                } else {
+                    retryCountV += 1
+                }
+            }
+        }
+        lastMissZoneCategory = .none
+        lastMissTimestamp = 0
+
+        // Decay retry bonus on success (self-correcting)
+        if isH {
+            retryBonusH *= 0.995
+        } else {
+            retryBonusV *= 0.995
+        }
+
+        // Persistence throttle
+        learningEventCount += 1
+        if learningEventCount >= 20 {
+            saveAdaptiveState()
+            learningEventCount = 0
+        }
+    }
+
+    /// Record a missed scroll (rejection or timeout)
+    private func recordActivationFailure() {
+        let cat = zoneCategory(for: isCornerZone(activationOriginalZone) ? currentZone : activationOriginalZone)
+        guard cat != .none else { return }
+
+        lastMissZoneCategory = cat
+        lastMissTimestamp = CACurrentMediaTime()
+
+        if cat == .horizontal {
+            missCountH += 1
+        } else {
+            missCountV += 1
+        }
+
+        // Halve counters to prevent overflow
+        if cat == .horizontal && (retryCountH + missCountH) > 1000 {
+            retryCountH /= 2
+            missCountH /= 2
+        }
+        if cat == .vertical && (retryCountV + missCountV) > 1000 {
+            retryCountV /= 2
+            missCountV /= 2
+        }
+
+        learningEventCount += 1
+        if learningEventCount >= 20 {
+            saveAdaptiveState()
+            learningEventCount = 0
+        }
+    }
+
+    /// Check if a new touch is a retry after a recent miss, and update retry bonus
+    private func checkForRetry(zone: ScrollZone) {
+        let cat = zoneCategory(for: zone)
+        guard cat != .none else { return }
+
+        if cat == lastMissZoneCategory && lastMissTimestamp > 0 {
+            let elapsed = CACurrentMediaTime() - lastMissTimestamp
+            if elapsed < 2.0 {
+                // This touch is a retry — update bonus
+                if cat == .horizontal {
+                    retryCountH += 1
+                    let total = retryCountH + missCountH
+                    if total >= 5 {
+                        let rate = CGFloat(retryCountH) / CGFloat(total)
+                        if rate > 0.30 {
+                            retryBonusH = min(rate * 0.10, 0.08)
+                            LogManager.shared.log(String(format: "Retry bonus updated: H=%.4f (rate=%.2f, retries=%d, misses=%d)",
+                                retryBonusH, rate, retryCountH, missCountH))
+                        }
+                    }
+                } else {
+                    retryCountV += 1
+                    let total = retryCountV + missCountV
+                    if total >= 5 {
+                        let rate = CGFloat(retryCountV) / CGFloat(total)
+                        if rate > 0.30 {
+                            retryBonusV = min(rate * 0.10, 0.08)
+                            LogManager.shared.log(String(format: "Retry bonus updated: V=%.4f (rate=%.2f, retries=%d, misses=%d)",
+                                retryBonusV, rate, retryCountV, missCountV))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Adaptive State Persistence
+
+    func saveAdaptiveState() {
+        let defaults = UserDefaults.standard
+        defaults.set(Double(learnedDirectionCenterH), forKey: "adaptive_dirCenterH")
+        defaults.set(Double(learnedDirectionCenterV), forKey: "adaptive_dirCenterV")
+        defaults.set(retryCountH, forKey: "adaptive_retryCountH")
+        defaults.set(missCountH, forKey: "adaptive_missCountH")
+        defaults.set(retryCountV, forKey: "adaptive_retryCountV")
+        defaults.set(missCountV, forKey: "adaptive_missCountV")
+        defaults.set(Double(retryBonusH), forKey: "adaptive_retryBonusH")
+        defaults.set(Double(retryBonusV), forKey: "adaptive_retryBonusV")
+        LogManager.shared.log(String(format: "Adaptive state saved: centerH=%.4f centerV=%.4f bonusH=%.4f bonusV=%.4f",
+            learnedDirectionCenterH, learnedDirectionCenterV, retryBonusH, retryBonusV))
+    }
+
+    func loadAdaptiveState() {
+        let defaults = UserDefaults.standard
+        if let v = defaults.object(forKey: "adaptive_dirCenterH") as? Double {
+            learnedDirectionCenterH = min(max(CGFloat(v), 0.40), 0.55)
+        }
+        if let v = defaults.object(forKey: "adaptive_dirCenterV") as? Double {
+            learnedDirectionCenterV = min(max(CGFloat(v), 0.40), 0.55)
+        }
+        retryCountH = defaults.integer(forKey: "adaptive_retryCountH")
+        missCountH = defaults.integer(forKey: "adaptive_missCountH")
+        retryCountV = defaults.integer(forKey: "adaptive_retryCountV")
+        missCountV = defaults.integer(forKey: "adaptive_missCountV")
+        if let v = defaults.object(forKey: "adaptive_retryBonusH") as? Double {
+            retryBonusH = min(max(CGFloat(v), 0.0), 0.08)
+        }
+        if let v = defaults.object(forKey: "adaptive_retryBonusV") as? Double {
+            retryBonusV = min(max(CGFloat(v), 0.0), 0.08)
+        }
+        LogManager.shared.log(String(format: "Adaptive state loaded: centerH=%.4f centerV=%.4f bonusH=%.4f bonusV=%.4f retryH=%d/%d retryV=%d/%d",
+            learnedDirectionCenterH, learnedDirectionCenterV, retryBonusH, retryBonusV,
+            retryCountH, missCountH, retryCountV, missCountV))
     }
 
     /// Check if a zone is a scroll zone (edges that produce scroll events)

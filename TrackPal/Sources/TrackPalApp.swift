@@ -41,6 +41,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("TrackPal: Ready")
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        TrackpadZoneScroller.shared.saveAdaptiveState()
+    }
+
     nonisolated func isAccessibilityEnabled() -> Bool {
         return AXIsProcessTrusted()
     }
@@ -278,6 +282,9 @@ final class Settings {
         scroller.lightTouchDensityThreshold = lightTouchDensityThreshold
         scroller.largeTouchMajorAxisThreshold = largeTouchMajorAxisThreshold
         scroller.largeTouchMinorAxisThreshold = largeTouchMinorAxisThreshold
+
+        // Load adaptive Bayesian tuning state
+        scroller.loadAdaptiveState()
 
         NSLog("TrackPal: Settings loaded - enabled=\(isEnabled), middleClick=\(middleClickEnabled), filterLight=\(filterLightTouches), filterLarge=\(filterLargeTouches)")
     }
