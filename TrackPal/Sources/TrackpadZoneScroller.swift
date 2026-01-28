@@ -313,6 +313,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 currentZone = preliminaryZone
 
                 if isScrollZone(preliminaryZone) {
+                    // Cancel any running inertia from a previous scroll direction
+                    DispatchQueue.main.async { InertiaScroller.shared.stopInertia() }
                     // Check if this is a retry after a recent miss
                     checkForRetry(zone: preliminaryZone)
                     // All scroll zone touches enter activation pending
@@ -327,6 +329,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                     isActivelyScrollingInZone = true
                     LogManager.shared.log(String(format: "Touch started at (%.2f, %.2f) zone: \(preliminaryZone) [ACTIVATING]", x, y))
                 } else if isCornerZone(preliminaryZone) {
+                    // Cancel any running inertia from a previous scroll direction
+                    DispatchQueue.main.async { InertiaScroller.shared.stopInertia() }
                     // Corner touches enter activation pending too:
                     // if user slides (not taps), promote to adjacent scroll zone.
                     isScrollActivationPending = true
@@ -1188,12 +1192,14 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         postScrollEvent(deltaX: scrollX, deltaY: scrollY, scrollPhase: phase, momentumPhase: 0)
     }
 
-    /// Post a scroll wheel CGEvent with phase metadata
-    /// - scrollPhase: 0=none, 1=began, 2=changed, 4=ended (matches NSEvent.Phase bitmask)
-    /// - momentumPhase: 0=none, 1=began, 2=changed, 4=ended
+    /// Post a scroll wheel CGEvent with pixel-precise deltas.
+    /// Phase fields are intentionally left at 0 to avoid triggering NSScrollView's
+    /// responsive scrolling tracking loop, which silently drops synthetic events.
     private func postScrollEvent(deltaX: Int32, deltaY: Int32, scrollPhase: Int64, momentumPhase: Int64) {
+        let source = CGEventSource(stateID: .combinedSessionState)
+
         guard let event = CGEvent(
-            scrollWheelEvent2Source: nil,
+            scrollWheelEvent2Source: source,
             units: .pixel,
             wheelCount: 2,
             wheel1: deltaY,
@@ -1204,11 +1210,37 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         // Tag with TrackPal signature so interceptor won't suppress our own events
         event.setIntegerValueField(.eventSourceUserData, value: kTrackPalEventSignature)
 
-        // Set scroll phase fields (critical for native-feeling scroll in all apps)
-        // Field 99 = kCGScrollWheelEventScrollPhase (tracking/finger phase)
-        // Field 123 = kCGScrollWheelEventMomentumPhase (inertia phase)
-        event.setIntegerValueField(CGEventField(rawValue: 99)!, value: scrollPhase)
-        event.setIntegerValueField(CGEventField(rawValue: 123)!, value: momentumPhase)
+        // Phase fields left at 0: avoids NSScrollView responsive scrolling
+        // tracking loop that drops synthetic events in Preview, Catalyst, etc.
+        // Field 99 = kCGScrollWheelEventScrollPhase
+        // Field 123 = kCGScrollWheelEventMomentumPhase
+        event.setIntegerValueField(CGEventField(rawValue: 99)!, value: 0)
+        event.setIntegerValueField(CGEventField(rawValue: 123)!, value: 0)
+
+        // Mark as continuous (trackpad-style) scroll for pixel-precise deltas
+        // Field 88 = kCGScrollWheelEventIsContinuous
+        event.setIntegerValueField(CGEventField(rawValue: 88)!, value: 1)
+
+        // Set pixel-level point deltas — this is what NSEvent.scrollingDeltaY/X reads
+        // when hasPreciseScrollingDeltas == true (isContinuous == 1)
+        // Field 96/97 = kCGScrollWheelEventPointDeltaAxis1/2
+        event.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: Int64(deltaY))
+        event.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: Int64(deltaX))
+
+        // Set line-level deltas as fallback for apps that read these
+        // Field 11/12 = kCGScrollWheelEventDeltaAxis1/2
+        if deltaY != 0 {
+            let lineDY = deltaY > 0 ? max(Int32(1), deltaY / 10) : min(Int32(-1), deltaY / 10)
+            event.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: Int64(lineDY))
+        }
+        if deltaX != 0 {
+            let lineDX = deltaX > 0 ? max(Int32(1), deltaX / 10) : min(Int32(-1), deltaX / 10)
+            event.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: Int64(lineDX))
+        }
+
+        // Zero out fixed-point deltas — not needed when PointDelta fields are set
+        event.setIntegerValueField(.scrollWheelEventFixedPtDeltaAxis1, value: 0)
+        event.setIntegerValueField(.scrollWheelEventFixedPtDeltaAxis2, value: 0)
 
         event.post(tap: .cghidEventTap)
     }

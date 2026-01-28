@@ -129,8 +129,10 @@ final class InertiaScroller {
             dx = Int32(velocityX)
         }
 
+        let source = CGEventSource(stateID: .combinedSessionState)
+
         guard let event = CGEvent(
-            scrollWheelEvent2Source: nil,
+            scrollWheelEvent2Source: source,
             units: .pixel,
             wheelCount: 2,
             wheel1: dy,
@@ -141,11 +143,35 @@ final class InertiaScroller {
         // Tag with TrackPal signature so interceptor won't suppress our own events
         event.setIntegerValueField(.eventSourceUserData, value: kTrackPalEventSignature)
 
-        // Set phase fields: scrollPhase=0 (none), momentumPhase as specified
+        // Phase fields left at 0: avoids NSScrollView responsive scrolling
+        // tracking loop that drops synthetic events in Preview, Catalyst, etc.
         // Field 99 = kCGScrollWheelEventScrollPhase
         // Field 123 = kCGScrollWheelEventMomentumPhase
         event.setIntegerValueField(CGEventField(rawValue: 99)!, value: 0)
-        event.setIntegerValueField(CGEventField(rawValue: 123)!, value: momentumPhase)
+        event.setIntegerValueField(CGEventField(rawValue: 123)!, value: 0)
+
+        // Mark as continuous (trackpad-style) scroll — required for native Cocoa apps
+        // Field 88 = kCGScrollWheelEventIsContinuous
+        event.setIntegerValueField(CGEventField(rawValue: 88)!, value: 1)
+
+        // Set pixel-level point deltas — this is what NSEvent.scrollingDeltaY/X reads
+        // when hasPreciseScrollingDeltas == true (isContinuous == 1)
+        event.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: Int64(dy))
+        event.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: Int64(dx))
+
+        // Set line-level deltas as fallback
+        if dy != 0 {
+            let lineDY = dy > 0 ? max(Int32(1), dy / 10) : min(Int32(-1), dy / 10)
+            event.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: Int64(lineDY))
+        }
+        if dx != 0 {
+            let lineDX = dx > 0 ? max(Int32(1), dx / 10) : min(Int32(-1), dx / 10)
+            event.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: Int64(lineDX))
+        }
+
+        // Zero out fixed-point deltas — not needed when PointDelta fields are set
+        event.setIntegerValueField(.scrollWheelEventFixedPtDeltaAxis1, value: 0)
+        event.setIntegerValueField(.scrollWheelEventFixedPtDeltaAxis2, value: 0)
 
         event.post(tap: .cghidEventTap)
     }
