@@ -157,7 +157,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private var activationConfidence: CGFloat = 0   // Bayesian confidence for horizontal zones
     private var currentTouchDensity: Float = 0      // latest density from processFilteredTouch
     private let activationFramesNeeded = 2
-    private let activationMaxFrames = 5           // max wait when barely moving
+    private let activationMaxFrames = 6           // max wait when barely moving
     private let directionCoherenceThreshold: CGFloat = 0.40
     private let minActivationMovement: CGFloat = 0.003
     private let minActivationVelocity: CGFloat = 0.08  // normalized units/sec on scroll axis
@@ -449,9 +449,10 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             // Reduced from *50 to *20 to prevent content flying past
             scrollVelY = -avgVy * scrollMultiplier * 20
         case .bottomEdge, .topEdge:
-            // Horizontal scrolling - use X velocity (inverted for natural scrolling)
+            // Horizontal scrolling - use X velocity
+            // No sign inversion: trackpad +X = screen +X (both rightward)
             // Compensate for trackpad aspect ratio (~1.6:1)
-            scrollVelX = -avgVx * scrollMultiplier * 20 * 1.6
+            scrollVelX = avgVx * scrollMultiplier * 20 * 1.6
         default:
             return
         }
@@ -637,7 +638,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         let total = absDx + absDy
         guard total > 0.0005 else {
             // Movement too small to determine direction — no update
-            return activationConfidence >= 0.85 ? .activated : .needMoreFrames
+            return activationConfidence >= 0.80 ? .activated : .needMoreFrames
         }
 
         let onAxisRatio: CGFloat  // how much movement is on the expected scroll axis
@@ -672,14 +673,16 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         else                       { velocityBoost = -0.03 }
 
         // --- Update confidence ---
-        activationConfidence += (directionBoost + velocityBoost) * qualityWeight
+        // Cap per-frame drop to prevent a single noisy frame from killing momentum
+        let update = (directionBoost + velocityBoost) * qualityWeight
+        activationConfidence += max(update, -0.20)
         activationConfidence = min(max(activationConfidence, 0.0), 1.0)
 
         LogManager.shared.log(String(format: "Bayesian confidence=%.3f (dir=%.3f vel=%.3f qw=%.2f density=%.3f)",
             activationConfidence, directionBoost, velocityBoost, qualityWeight, density))
 
         // --- Decision ---
-        if activationConfidence >= 0.85 { return .activated }
+        if activationConfidence >= 0.80 { return .activated }
         if activationConfidence <= 0.20 { return .rejected }
         return .needMoreFrames
     }
@@ -932,10 +935,11 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
         case .bottomEdge, .topEdge:
             // Horizontal scrolling - use X delta
-            // Natural scrolling: invert direction (swipe right = content moves right)
+            // Trackpad +X and screen +X both point right, so no sign inversion needed
+            // (unlike vertical where trackpad +Y=up but screen +Y=down)
             // Compensate for trackpad aspect ratio (~1.6:1 width:height)
             let aspectCompensation: CGFloat = 1.6
-            scrollAccumulatorX += -adjustedDelta.x * scrollMultiplier * 100 * aspectCompensation
+            scrollAccumulatorX += adjustedDelta.x * scrollMultiplier * 100 * aspectCompensation
             isActivelyScrollingInZone = true
 
         case .center, .none, .middleClick,
