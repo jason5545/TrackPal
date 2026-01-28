@@ -157,7 +157,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private var activationConfidence: CGFloat = 0   // Bayesian confidence for horizontal zones
     private var currentTouchDensity: Float = 0      // latest density from processFilteredTouch
     private let activationFramesNeeded = 2
-    private let activationMaxFrames = 6           // max wait when barely moving
+    private let activationMaxFrames = 8           // max wait when barely moving
     private let directionCoherenceThreshold: CGFloat = 0.40
     private let minActivationMovement: CGFloat = 0.003
     private let minActivationVelocity: CGFloat = 0.08  // normalized units/sec on scroll axis
@@ -652,9 +652,9 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         // Direction boost: positive when on-axis dominant, negative when off-axis
         let directionBoost: CGFloat
         if onAxisRatio >= 0.5 {
-            directionBoost = (onAxisRatio - 0.5) * 0.50  // max +0.25
+            directionBoost = (onAxisRatio - 0.5) * 0.55  // max +0.275
         } else {
-            directionBoost = (onAxisRatio - 0.5) * 0.60  // max -0.30 (stronger penalty)
+            directionBoost = (onAxisRatio - 0.5) * 0.50  // max -0.25 (symmetric with positive)
         }
 
         // --- Velocity evidence ---
@@ -670,7 +670,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         if onAxisSpeed > 0.30      { velocityBoost = 0.10 }
         else if onAxisSpeed > 0.15 { velocityBoost = 0.05 }
         else if onAxisSpeed > 0.05 { velocityBoost = 0.02 }
-        else                       { velocityBoost = -0.03 }
+        else                       { velocityBoost = 0.00 }
 
         // --- Update confidence ---
         // Cap per-frame drop to prevent a single noisy frame from killing momentum
@@ -682,7 +682,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             activationConfidence, directionBoost, velocityBoost, qualityWeight, density))
 
         // --- Decision ---
-        if activationConfidence >= 0.80 { return .activated }
+        if activationConfidence >= 0.75 { return .activated }
         if activationConfidence <= 0.20 { return .rejected }
         return .needMoreFrames
     }
