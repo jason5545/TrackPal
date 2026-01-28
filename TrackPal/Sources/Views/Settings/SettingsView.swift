@@ -46,12 +46,12 @@ struct SettingsView: View {
 
     private var generalSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-            SectionHeader(title: "一般")
+            SectionHeader(title: "General")
 
             SettingsToggleRow(
                 icon: "power.circle",
                 iconColor: launchAtLogin ? DesignTokens.Colors.accentPrimary : DesignTokens.Colors.textSecondary,
-                title: "開機時自動啟動",
+                title: "Launch at Login",
                 isOn: $launchAtLogin
             )
             .onChange(of: launchAtLogin) { _, newValue in
@@ -64,12 +64,12 @@ struct SettingsView: View {
 
     private var scrollZoneSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-            SectionHeader(title: "捲動區域")
+            SectionHeader(title: "Scroll Zones")
 
             SettingsPickerRow(
                 icon: "arrow.up.arrow.down",
                 iconColor: DesignTokens.Colors.accentPrimary,
-                title: "上下捲動",
+                title: "Vertical Scroll",
                 selection: $edgeMode,
                 pickerWidth: 150
             )
@@ -81,7 +81,7 @@ struct SettingsView: View {
             SettingsPickerRow(
                 icon: "arrow.left.arrow.right",
                 iconColor: DesignTokens.Colors.accentPrimary,
-                title: "水平捲動",
+                title: "Horizontal Scroll",
                 selection: $horizontalPosition,
                 pickerWidth: 100
             )
@@ -91,7 +91,7 @@ struct SettingsView: View {
             }
 
             SettingsSliderRow(
-                title: "邊緣寬度",
+                title: "Edge Width",
                 value: $edgeWidth,
                 range: 0.05...0.30,
                 format: { "\(Int($0 * 100))%" },
@@ -103,7 +103,7 @@ struct SettingsView: View {
             }
 
             SettingsSliderRow(
-                title: "水平高度",
+                title: "Horizontal Height",
                 value: $bottomHeight,
                 range: 0.10...0.40,
                 format: { "\(Int($0 * 100))%" },
@@ -120,10 +120,10 @@ struct SettingsView: View {
 
     private var scrollBehaviorSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-            SectionHeader(title: "捲動行為")
+            SectionHeader(title: "Scroll Behavior")
 
             SettingsSliderRow(
-                title: "捲動靈敏度",
+                title: "Scroll Sensitivity",
                 value: $sensitivity,
                 range: 1.0...10.0,
                 format: { String(format: "%.1fx", $0) },
@@ -137,7 +137,7 @@ struct SettingsView: View {
             SettingsPickerRow(
                 icon: "chart.line.uptrend.xyaxis",
                 iconColor: DesignTokens.Colors.accentPrimary,
-                title: "加速曲線",
+                title: "Acceleration Curve",
                 selection: $accelerationCurve,
                 pickerWidth: 140
             )
@@ -152,12 +152,12 @@ struct SettingsView: View {
 
     private var middleClickSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-            SectionHeader(title: "中鍵點擊")
+            SectionHeader(title: "Middle Click")
 
             SettingsToggleRow(
                 icon: "hand.tap",
                 iconColor: middleClickEnabled ? DesignTokens.Colors.accentPrimary : DesignTokens.Colors.textSecondary,
-                title: "啟用中鍵點擊",
+                title: "Enable Middle Click",
                 isOn: $middleClickEnabled
             )
             .onChange(of: middleClickEnabled) { _, newValue in
@@ -171,12 +171,12 @@ struct SettingsView: View {
 
     private var cornerTriggerSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-            SectionHeader(title: "角落觸發")
+            SectionHeader(title: "Corner Triggers")
 
             SettingsToggleRow(
                 icon: "rectangle.dashed.badge.record",
                 iconColor: cornerTriggerEnabled ? DesignTokens.Colors.accentPrimary : DesignTokens.Colors.textSecondary,
-                title: "啟用角落觸發",
+                title: "Enable Corner Triggers",
                 isOn: $cornerTriggerEnabled
             )
             .onChange(of: cornerTriggerEnabled) { _, newValue in
@@ -186,7 +186,7 @@ struct SettingsView: View {
 
             if cornerTriggerEnabled {
                 SettingsSliderRow(
-                    title: "角落區域大小",
+                    title: "Corner Zone Size",
                     value: $cornerTriggerZoneSize,
                     range: 0.05...0.25,
                     format: { "\(Int($0 * 100))%" },
@@ -197,22 +197,22 @@ struct SettingsView: View {
                     TrackpadZoneScroller.shared.cornerTriggerZoneSize = CGFloat(newValue)
                 }
 
-                cornerActionRow(title: "左上角", icon: "arrow.up.left", selection: $cornerActionTopLeft) { newValue in
+                cornerActionRow(title: "Top Left", icon: "arrow.up.left", selection: $cornerActionTopLeft) { newValue in
                     Settings.shared.cornerActionTopLeft = newValue
                     TrackpadZoneScroller.shared.cornerActions[.topLeftCorner] = newValue
                 }
 
-                cornerActionRow(title: "右上角", icon: "arrow.up.right", selection: $cornerActionTopRight) { newValue in
+                cornerActionRow(title: "Top Right", icon: "arrow.up.right", selection: $cornerActionTopRight) { newValue in
                     Settings.shared.cornerActionTopRight = newValue
                     TrackpadZoneScroller.shared.cornerActions[.topRightCorner] = newValue
                 }
 
-                cornerActionRow(title: "左下角", icon: "arrow.down.left", selection: $cornerActionBottomLeft) { newValue in
+                cornerActionRow(title: "Bottom Left", icon: "arrow.down.left", selection: $cornerActionBottomLeft) { newValue in
                     Settings.shared.cornerActionBottomLeft = newValue
                     TrackpadZoneScroller.shared.cornerActions[.bottomLeftCorner] = newValue
                 }
 
-                cornerActionRow(title: "右下角", icon: "arrow.down.right", selection: $cornerActionBottomRight) { newValue in
+                cornerActionRow(title: "Bottom Right", icon: "arrow.down.right", selection: $cornerActionBottomRight) { newValue in
                     Settings.shared.cornerActionBottomRight = newValue
                     TrackpadZoneScroller.shared.cornerActions[.bottomRightCorner] = newValue
                 }
@@ -221,7 +221,7 @@ struct SettingsView: View {
     }
 
     private func cornerActionRow(
-        title: String,
+        title: LocalizedStringKey,
         icon: String,
         selection: Binding<TrackpadZoneScroller.CornerAction>,
         onChange: @escaping (TrackpadZoneScroller.CornerAction) -> Void
@@ -249,7 +249,7 @@ struct SettingsView: View {
 
             Spacer()
 
-            Button("結束") {
+            Button("Quit") {
                 NSApplication.shared.terminate(nil)
             }
             .glassButtonStyle()

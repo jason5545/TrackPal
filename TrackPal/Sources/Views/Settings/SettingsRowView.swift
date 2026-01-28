@@ -4,7 +4,7 @@ import SwiftUI
 struct SettingsRowView<Control: View>: View {
     let icon: String
     let iconColor: Color
-    let title: String
+    let title: LocalizedStringKey
     var description: String? = nil
     @ViewBuilder let control: () -> Control
 

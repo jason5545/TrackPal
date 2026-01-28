@@ -61,6 +61,7 @@ extension View {
             .overlay(
                 Capsule()
                     .strokeBorder(DesignTokens.Colors.glassBorder, lineWidth: 0.5)
+                    .allowsHitTesting(false)
             )
     }
 }
@@ -82,6 +83,7 @@ struct HoverableRowModifier: ViewModifier {
             .overlay(
                 RoundedRectangle(cornerRadius: DesignTokens.Dimensions.rowRadius)
                     .fill(Color.white.opacity(isHovered ? 0.04 : 0))
+                    .allowsHitTesting(false)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: DesignTokens.Dimensions.rowRadius)
@@ -89,6 +91,7 @@ struct HoverableRowModifier: ViewModifier {
                         isHovered ? DesignTokens.Colors.glassBorderHover : DesignTokens.Colors.glassBorder,
                         lineWidth: 0.5
                     )
+                    .allowsHitTesting(false)
             )
             .onHover { hovering in
                 withAnimation(DesignTokens.Animation.hover) {

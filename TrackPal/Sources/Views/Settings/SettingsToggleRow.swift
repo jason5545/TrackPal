@@ -4,7 +4,7 @@ import SwiftUI
 struct SettingsToggleRow: View {
     let icon: String
     let iconColor: Color
-    let title: String
+    let title: LocalizedStringKey
     var description: String? = nil
     @Binding var isOn: Bool
 

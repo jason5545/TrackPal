@@ -22,6 +22,8 @@
 		A10000B9232F00B9 /* SettingsPickerRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A9232F00A9 /* SettingsPickerRow.swift */; };
 		A10000BA232F00BA /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000AA232F00AA /* SettingsView.swift */; };
 		A10000D0232F00D0 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000D1232F00D1 /* Assets.xcassets */; };
+		A10000BB232F00BB /* LocalizedNameProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000AB232F00AB /* LocalizedNameProvider.swift */; };
+		A10000BC232F00BC /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = A10000AC232F00AC /* Localizable.xcstrings */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -45,6 +47,8 @@
 		A10000A9232F00A9 /* SettingsPickerRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsPickerRow.swift; sourceTree = "<group>"; };
 		A10000AA232F00AA /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		A10000D1232F00D1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A10000AB232F00AB /* LocalizedNameProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalizedNameProvider.swift; sourceTree = "<group>"; };
+		A10000AC232F00AC /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -90,6 +94,8 @@
 				A1000013232F0003 /* InertiaScroller.swift */,
 				A1000016232F0006 /* LogManager.swift */,
 				A1000018232F0008 /* TrackpadZoneScroller.swift */,
+				A10000AB232F00AB /* LocalizedNameProvider.swift */,
+				A10000AC232F00AC /* Localizable.xcstrings */,
 				A1000019232F0009 /* MultitouchSupport.h */,
 				A100001A232F000A /* TrackPal-Bridging-Header.h */,
 				A10000C0232F00C0 /* Views */,
@@ -190,6 +196,7 @@
 			knownRegions = (
 				en,
 				Base,
+				"zh-Hant",
 			);
 			mainGroup = A1000050232F0040;
 			productRefGroup = A1000052232F0042 /* Products */;
@@ -207,6 +214,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000D0232F00D0 /* Assets.xcassets in Resources */,
+				A10000BC232F00BC /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -231,6 +239,7 @@
 				A10000B8232F00B8 /* SettingsToggleRow.swift in Sources */,
 				A10000B9232F00B9 /* SettingsPickerRow.swift in Sources */,
 				A10000BA232F00BA /* SettingsView.swift in Sources */,
+				A10000BB232F00BB /* LocalizedNameProvider.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

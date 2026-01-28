@@ -72,13 +72,13 @@ struct MenuBarPopupView: View {
     private var headerSection: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(isSettingsOpen ? "設定" : "TrackPal")
+                Text(isSettingsOpen ? "Settings" : "TrackPal")
                     .font(DesignTokens.Typography.title)
                     .foregroundStyle(DesignTokens.Colors.textPrimary)
                     .contentTransition(.numericText())
 
                 if !isSettingsOpen {
-                    Text("觸控板區域捲動")
+                    Text("Trackpad Zone Scrolling")
                         .font(DesignTokens.Typography.caption)
                         .foregroundStyle(DesignTokens.Colors.textTertiary)
                 }
@@ -137,7 +137,7 @@ struct MenuBarPopupView: View {
         SettingsToggleRow(
             icon: isEnabled ? "hand.draw.fill" : "hand.draw",
             iconColor: isEnabled ? DesignTokens.Colors.accentPrimary : DesignTokens.Colors.textSecondary,
-            title: "啟用區域捲動",
+            title: "Enable Zone Scrolling",
             isOn: $isEnabled
         )
         .onChange(of: isEnabled) { _, newValue in
@@ -167,13 +167,13 @@ struct MenuBarPopupView: View {
 
     private var footerSection: some View {
         HStack {
-            Text("需要輔助功能權限")
+            Text("Accessibility Permission Required")
                 .font(DesignTokens.Typography.caption)
                 .foregroundStyle(DesignTokens.Colors.textTertiary)
 
             Spacer()
 
-            Button("結束") {
+            Button("Quit") {
                 NSApplication.shared.terminate(nil)
             }
             .glassButtonStyle()

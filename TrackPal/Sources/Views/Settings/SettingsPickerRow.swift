@@ -6,10 +6,10 @@ enum PickerRowStyle {
     case menu
 }
 
-struct SettingsPickerRow<T: Hashable & CaseIterable & RawRepresentable>: View where T.RawValue == String, T.AllCases: RandomAccessCollection {
+struct SettingsPickerRow<T: Hashable & CaseIterable & RawRepresentable & LocalizedNameProvider>: View where T.RawValue == String, T.AllCases: RandomAccessCollection {
     let icon: String
     let iconColor: Color
-    let title: String
+    let title: LocalizedStringKey
     @Binding var selection: T
     var style: PickerRowStyle = .segmented
     var pickerWidth: CGFloat = 150
@@ -25,14 +25,14 @@ struct SettingsPickerRow<T: Hashable & CaseIterable & RawRepresentable>: View wh
                 case .segmented:
                     Picker("", selection: $selection) {
                         ForEach(T.allCases, id: \.self) { item in
-                            Text(item.rawValue).tag(item)
+                            Text(item.localizedName).tag(item)
                         }
                     }
                     .pickerStyle(.segmented)
                 case .menu:
                     Picker("", selection: $selection) {
                         ForEach(T.allCases, id: \.self) { item in
-                            Text(item.rawValue).tag(item)
+                            Text(item.localizedName).tag(item)
                         }
                     }
                     .pickerStyle(.menu)

@@ -85,22 +85,46 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private var filteredLightTouchCount: Int = 0
     private var filteredLargeTouchCount: Int = 0
 
-    enum VerticalEdgeMode: String, CaseIterable {
-        case left = "左側"
-        case right = "右側"
-        case both = "雙側"
+    enum VerticalEdgeMode: String, CaseIterable, LocalizedNameProvider {
+        case left = "left"
+        case right = "right"
+        case both = "both"
+
+        var localizedName: String {
+            switch self {
+            case .left: String(localized: "Left")
+            case .right: String(localized: "Right")
+            case .both: String(localized: "Both")
+            }
+        }
     }
 
-    enum HorizontalPosition: String, CaseIterable {
-        case bottom = "下方"
-        case top = "上方"
+    enum HorizontalPosition: String, CaseIterable, LocalizedNameProvider {
+        case bottom = "bottom"
+        case top = "top"
+
+        var localizedName: String {
+            switch self {
+            case .bottom: String(localized: "Bottom")
+            case .top: String(localized: "Top")
+            }
+        }
     }
 
-    enum AccelerationCurveType: String, CaseIterable {
-        case linear = "線性"
-        case quadratic = "二次"
-        case cubic = "三次"
-        case ease = "緩動"
+    enum AccelerationCurveType: String, CaseIterable, LocalizedNameProvider {
+        case linear = "linear"
+        case quadratic = "quadratic"
+        case cubic = "cubic"
+        case ease = "ease"
+
+        var localizedName: String {
+            switch self {
+            case .linear: String(localized: "Linear")
+            case .quadratic: String(localized: "Quadratic")
+            case .cubic: String(localized: "Cubic")
+            case .ease: String(localized: "Ease")
+            }
+        }
     }
 
     // MARK: - State
@@ -204,13 +228,24 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         case bottomRightCorner
     }
 
-    enum CornerAction: String, CaseIterable {
-        case none = "無動作"
-        case missionControl = "Mission Control"
-        case appWindows = "應用程式視窗"
-        case showDesktop = "顯示桌面"
-        case launchpad = "啟動台"
-        case notificationCenter = "通知中心"
+    enum CornerAction: String, CaseIterable, LocalizedNameProvider {
+        case none = "none"
+        case missionControl = "missionControl"
+        case appWindows = "appWindows"
+        case showDesktop = "showDesktop"
+        case launchpad = "launchpad"
+        case notificationCenter = "notificationCenter"
+
+        var localizedName: String {
+            switch self {
+            case .none: String(localized: "No Action")
+            case .missionControl: String(localized: "Mission Control")
+            case .appWindows: String(localized: "App Windows")
+            case .showDesktop: String(localized: "Show Desktop")
+            case .launchpad: String(localized: "Launchpad")
+            case .notificationCenter: String(localized: "Notification Center")
+            }
+        }
     }
 
     /// Gesture mode for tracking single vs multi-finger state

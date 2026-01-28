@@ -195,7 +195,7 @@ struct TrackpadLegendView: View {
                     .fill(DesignTokens.Colors.verticalZone)
                     .frame(width: 12, height: 12)
                     .cornerRadius(2)
-                Text("上下捲動")
+                Text("Vertical")
                     .font(DesignTokens.Typography.caption)
                     .foregroundStyle(DesignTokens.Colors.textSecondary)
             }
@@ -205,7 +205,7 @@ struct TrackpadLegendView: View {
                     .fill(DesignTokens.Colors.horizontalZone)
                     .frame(width: 12, height: 12)
                     .cornerRadius(2)
-                Text("水平捲動")
+                Text("Horizontal")
                     .font(DesignTokens.Typography.caption)
                     .foregroundStyle(DesignTokens.Colors.textSecondary)
             }
@@ -216,7 +216,7 @@ struct TrackpadLegendView: View {
                         .fill(DesignTokens.Colors.middleClickZone)
                         .frame(width: 12, height: 12)
                         .cornerRadius(2)
-                    Text("中鍵")
+                    Text("Middle")
                         .font(DesignTokens.Typography.caption)
                         .foregroundStyle(DesignTokens.Colors.textSecondary)
                 }
@@ -228,7 +228,7 @@ struct TrackpadLegendView: View {
                         .fill(DesignTokens.Colors.cornerTriggerZone)
                         .frame(width: 12, height: 12)
                         .cornerRadius(2)
-                    Text("角落")
+                    Text("Corner")
                         .font(DesignTokens.Typography.caption)
                         .foregroundStyle(DesignTokens.Colors.textSecondary)
                 }

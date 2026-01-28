@@ -3,7 +3,7 @@ import SwiftUI
 
 /// A settings row with a label, slider, and value display
 struct SettingsSliderRow: View {
-    let title: String
+    let title: LocalizedStringKey
     @Binding var value: Double
     let range: ClosedRange<Double>
     let format: (Double) -> String
@@ -56,14 +56,14 @@ struct SettingsSliderRow: View {
 #Preview {
     VStack(spacing: 16) {
         SettingsSliderRow(
-            title: "左右邊緣寬度",
+            title: "Edge Width",
             value: .constant(0.15),
             range: 0.05...0.30,
             format: { "\(Int($0 * 100))%" }
         )
 
         SettingsSliderRow(
-            title: "邊緣寬度",
+            title: "Edge Width",
             value: .constant(0.15),
             range: 0.05...0.30,
             format: { "\(Int($0 * 100))%" },

@@ -53,11 +53,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("TrackPal: Accessibility permission required")
 
         let alert = NSAlert()
-        alert.messageText = "需要輔助功能權限"
-        alert.informativeText = "TrackPal 需要輔助功能權限才能追蹤觸控板輸入。\n\n請在「系統設定 → 隱私權與安全性 → 輔助功能」中允許 TrackPal。"
+        alert.messageText = String(localized: "Accessibility Permission Required")
+        alert.informativeText = String(localized: "TrackPal needs accessibility permission to track trackpad input.\n\nPlease allow TrackPal in System Settings → Privacy & Security → Accessibility.")
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "開啟系統設定")
-        alert.addButton(withTitle: "稍後")
+        alert.addButton(withTitle: String(localized: "Open System Settings"))
+        alert.addButton(withTitle: String(localized: "Later"))
 
         if alert.runModal() == .alertFirstButtonReturn {
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
@@ -249,6 +249,9 @@ final class Settings {
     private init() {}
 
     func loadSettings() {
+        // One-time migration: convert old Chinese raw values to new English identifiers
+        migrateEnumRawValues()
+
         let scroller = TrackpadZoneScroller.shared
 
         // Check if first launch - set up defaults
@@ -287,6 +290,37 @@ final class Settings {
         scroller.loadAdaptiveState()
 
         NSLog("TrackPal: Settings loaded - enabled=\(isEnabled), middleClick=\(middleClickEnabled), filterLight=\(filterLightTouches), filterLarge=\(filterLargeTouches)")
+    }
+
+    private func migrateEnumRawValues() {
+        let migrationKey = "hasMigratedEnumRawValues_v2"
+        guard !defaults.bool(forKey: migrationKey) else { return }
+
+        let verticalEdgeMap = ["左側": "left", "右側": "right", "雙側": "both"]
+        let horizontalPositionMap = ["下方": "bottom", "上方": "top"]
+        let accelerationCurveMap = ["線性": "linear", "二次": "quadratic", "三次": "cubic", "緩動": "ease"]
+        let cornerActionMap = [
+            "無動作": "none", "Mission Control": "missionControl",
+            "應用程式視窗": "appWindows", "顯示桌面": "showDesktop",
+            "啟動台": "launchpad", "通知中心": "notificationCenter"
+        ]
+
+        func migrate(_ key: String, _ map: [String: String]) {
+            if let old = defaults.string(forKey: key), let new = map[old] {
+                defaults.set(new, forKey: key)
+            }
+        }
+
+        migrate(Keys.verticalEdgeMode, verticalEdgeMap)
+        migrate(Keys.horizontalPosition, horizontalPositionMap)
+        migrate(Keys.accelerationCurveType, accelerationCurveMap)
+        migrate(Keys.cornerActionTopLeft, cornerActionMap)
+        migrate(Keys.cornerActionTopRight, cornerActionMap)
+        migrate(Keys.cornerActionBottomLeft, cornerActionMap)
+        migrate(Keys.cornerActionBottomRight, cornerActionMap)
+
+        defaults.set(true, forKey: migrationKey)
+        NSLog("TrackPal: Enum raw value migration completed")
     }
 
     private func updateLaunchAtLogin(_ enabled: Bool) {
