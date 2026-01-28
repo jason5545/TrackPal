@@ -733,11 +733,14 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         // --- Velocity evidence ---
         let latestV = velocityHistory.last
         let onAxisSpeed: CGFloat
+        let offAxisSpeed: CGFloat
         switch currentZone {
         case .bottomEdge, .topEdge:
             onAxisSpeed = abs(latestV?.vx ?? 0)
+            offAxisSpeed = abs(latestV?.vy ?? 0)
         default:
             onAxisSpeed = abs(latestV?.vy ?? 0)
+            offAxisSpeed = abs(latestV?.vx ?? 0)
         }
         let velocityBoost: CGFloat
         if onAxisSpeed > 0.30      { velocityBoost = 0.10 }
@@ -754,6 +757,26 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         // --- Effective threshold with retry bonus ---
         let retryBonus = isHorizontalZone(currentZone) ? retryBonusH : retryBonusV
         let effectiveThreshold = max(0.75 - retryBonus, 0.67)
+
+        // --- Horizontal zone additional rejection criteria ---
+        // For horizontal zones, if off-axis (vertical) velocity is high relative to on-axis,
+        // it indicates the user is trying to scroll vertically, not horizontally.
+        // This is a common false positive when touching the bottom edge.
+        if isHorizontalZone(currentZone) {
+            // If vertical movement is dominant (off-axis speed > on-axis speed * 1.5),
+            // and we're still in early frames, reject immediately
+            if offAxisSpeed > onAxisSpeed * 1.5 && activationFrames.count <= 3 {
+                LogManager.shared.log(String(format: "Horizontal zone rejected: vertical dominant (vx=%.3f, vy=%.3f)", onAxisSpeed, offAxisSpeed))
+                return .rejected
+            }
+            
+            // Additional check: if onAxisRatio is too low (< 0.35), it means
+            // movement is mostly perpendicular to the expected scroll direction
+            if onAxisRatio < 0.35 && activationFrames.count >= 2 {
+                LogManager.shared.log(String(format: "Horizontal zone rejected: low on-axis ratio (%.3f)", onAxisRatio))
+                return .rejected
+            }
+        }
 
         LogManager.shared.log(String(format: "Bayesian confidence=%.3f (dir=%.3f vel=%.3f qw=%.2f density=%.3f center=%.3f thresh=%.3f)",
             activationConfidence, directionBoost, velocityBoost, qualityWeight, density, center, effectiveThreshold))
