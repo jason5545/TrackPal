@@ -248,7 +248,27 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
         var isFalseActivation: Bool {
             // Short duration (< 300ms) and short distance (< 0.05) indicates false activation
-            return duration < 0.3 && totalDistance < 0.05 && !wasCancelled
+            let basicFalseActivation = duration < 0.3 && totalDistance < 0.05 && !wasCancelled
+            
+            // Additional check for horizontal zones: very short sessions may be misclassified clicks
+            // But be careful not to be too aggressive - we want to catch actual mistakes without
+            // penalizing quick, intentional horizontal scrolls
+            let isHorizontalZone = (zone == .bottomEdge || zone == .topEdge)
+            if isHorizontalZone && !wasCancelled {
+                // Only flag as false activation if it's VERY clearly a mistake:
+                // - Extremely short duration (< 100ms) - this is almost certainly a tap/click
+                // - Very short duration (< 200ms) with very low quality metrics
+                let extremelyShort = duration < 0.10
+                let veryShortWithLowQuality = duration < 0.20 && 
+                                               activationData.onAxisRatio < 0.55 && 
+                                               activationData.confidence < 0.80
+                
+                if extremelyShort || veryShortWithLowQuality {
+                    return true
+                }
+            }
+            
+            return basicFalseActivation
         }
     }
 
@@ -830,6 +850,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
         // --- Effective threshold with retry bonus ---
         let retryBonus = isHorizontalZone(currentZone) ? retryBonusH : retryBonusV
+        // Use consistent threshold for both horizontal and vertical zones
+        // Retry bonus helps users who struggle with activation
         let effectiveThreshold = max(0.75 - retryBonus, 0.67)
 
         // --- Horizontal zone additional rejection criteria ---
@@ -837,23 +859,61 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         // it indicates the user is trying to scroll vertically, not horizontally.
         // This is a common false positive when touching the bottom edge.
         if isHorizontalZone(currentZone) {
-            // If vertical movement is dominant (off-axis speed > on-axis speed * 1.5),
-            // and we're still in early frames, reject immediately
-            if offAxisSpeed > onAxisSpeed * 1.5 && activationFrames.count <= 3 {
+            // Calculate total movement so far to detect click vs scroll intent
+            let totalDx = activationDeltas.reduce(0) { $0 + abs($1.x) }
+            let totalDy = activationDeltas.reduce(0) { $0 + abs($1.y) }
+            let totalMovement = totalDx + totalDy
+            
+            // CLICK DETECTION: Only trigger on TRULY minimal movement (< 0.003)
+            // This catches actual click attempts without interfering with slow scrolls
+            if activationFrames.count <= 2 && totalMovement < 0.003 {
+                // Very minimal movement - possible click, but don't be too aggressive
+                // Just add a small delay rather than reducing confidence significantly
+                LogManager.shared.log(String(format: "Horizontal: minimal movement (%.4f), watching for click intent", totalMovement))
+            }
+            
+            // If vertical movement is clearly dominant (off-axis speed > on-axis speed * 2.0),
+            // and we're still in early frames, this is likely a vertical scroll attempt
+            // Use 2.0 instead of 1.8 to be more lenient for genuine horizontal scrolls
+            if offAxisSpeed > onAxisSpeed * 2.0 && activationFrames.count <= 3 {
                 LogManager.shared.log(String(format: "Horizontal zone rejected: vertical dominant (vx=%.3f, vy=%.3f)", onAxisSpeed, offAxisSpeed))
                 return .rejected
             }
             
-            // Additional check: if onAxisRatio is too low (< 0.35), it means
-            // movement is mostly perpendicular to the expected scroll direction
+            // Check on-axis ratio - but only reject if it's VERY low (< 0.35)
+            // and we have enough frames to be confident (>= 2)
             if onAxisRatio < 0.35 && activationFrames.count >= 2 {
                 LogManager.shared.log(String(format: "Horizontal zone rejected: low on-axis ratio (%.3f)", onAxisRatio))
                 return .rejected
             }
+            
+            // MINIMUM DISTANCE CHECK: Relaxed threshold for more natural feel
+            // Only apply after several frames to avoid blocking initial activation
+            let minHorizontalMovement: CGFloat = 0.008  // ~0.8% of trackpad width
+            if activationDeltas.count >= 4 && totalDx < minHorizontalMovement && onAxisRatio < 0.70 {
+                LogManager.shared.log(String(format: "Horizontal zone rejected: insufficient horizontal movement (%.4f)", totalDx))
+                return .rejected
+            }
+            
+            // CUMULATIVE DIRECTION CONSISTENCY: Relaxed to allow more natural scrolling
+            // Only check after 4+ frames and require very low ratio to reject
+            if activationDeltas.count >= 4 {
+                let cumTotalDx = activationDeltas.reduce(0) { $0 + abs($1.x) } * 1.6
+                let cumTotalDy = activationDeltas.reduce(0) { $0 + abs($1.y) }
+                let cumTotal = cumTotalDx + cumTotalDy
+                if cumTotal > 0.001 {
+                    let cumOnAxisRatio = cumTotalDx / cumTotal
+                    // Only reject if clearly inconsistent (ratio < 0.45)
+                    if cumOnAxisRatio < 0.45 {
+                        LogManager.shared.log(String(format: "Horizontal zone rejected: cumulative direction inconsistent (%.3f)", cumOnAxisRatio))
+                        return .rejected
+                    }
+                }
+            }
         }
 
-        LogManager.shared.log(String(format: "Bayesian confidence=%.3f (dir=%.3f vel=%.3f qw=%.2f density=%.3f center=%.3f thresh=%.3f)",
-            activationConfidence, directionBoost, velocityBoost, qualityWeight, density, center, effectiveThreshold))
+        LogManager.shared.log(String(format: "Bayesian confidence=%.3f (dir=%.3f vel=%.3f qw=%.2f density=%.3f center=%.3f thresh=%.3f frames=%d)",
+            activationConfidence, directionBoost, velocityBoost, qualityWeight, density, center, effectiveThreshold, activationDeltas.count))
 
         // --- Decision ---
         if activationConfidence >= effectiveThreshold { return .activated }
