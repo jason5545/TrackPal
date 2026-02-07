@@ -451,6 +451,16 @@
         }
       }
     },
+    "Right Click" : {
+      "localizations" : {
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "右鍵"
+          }
+        }
+      }
+    },
     "Notification Center" : {
       "localizations" : {
         "zh-Hant" : {

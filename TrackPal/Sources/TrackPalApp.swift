@@ -214,7 +214,7 @@ final class Settings {
         get {
             guard let raw = defaults.string(forKey: Keys.cornerActionBottomRight),
                   let action = TrackpadZoneScroller.CornerAction(rawValue: raw) else {
-                return .none
+                return .rightClick
             }
             return action
         }
@@ -293,7 +293,7 @@ final class Settings {
     }
 
     private func migrateEnumRawValues() {
-        let migrationKey = "hasMigratedEnumRawValues_v2"
+        let migrationKey = "hasMigratedEnumRawValues_v3"
         guard !defaults.bool(forKey: migrationKey) else { return }
 
         let verticalEdgeMap = ["左側": "left", "右側": "right", "雙側": "both"]
@@ -302,7 +302,8 @@ final class Settings {
         let cornerActionMap = [
             "無動作": "none", "Mission Control": "missionControl",
             "應用程式視窗": "appWindows", "顯示桌面": "showDesktop",
-            "啟動台": "launchpad", "通知中心": "notificationCenter"
+            "啟動台": "launchpad", "通知中心": "notificationCenter",
+            "右鍵": "rightClick"
         ]
 
         func migrate(_ key: String, _ map: [String: String]) {
@@ -318,6 +319,13 @@ final class Settings {
         migrate(Keys.cornerActionTopRight, cornerActionMap)
         migrate(Keys.cornerActionBottomLeft, cornerActionMap)
         migrate(Keys.cornerActionBottomRight, cornerActionMap)
+
+        // Preserve previous behavior from old builds where bottom-right No Action
+        // was overloaded as right-click.
+        if defaults.string(forKey: Keys.cornerActionBottomRight) == nil ||
+            defaults.string(forKey: Keys.cornerActionBottomRight) == TrackpadZoneScroller.CornerAction.none.rawValue {
+            defaults.set(TrackpadZoneScroller.CornerAction.rightClick.rawValue, forKey: Keys.cornerActionBottomRight)
+        }
 
         defaults.set(true, forKey: migrationKey)
         NSLog("TrackPal: Enum raw value migration completed")

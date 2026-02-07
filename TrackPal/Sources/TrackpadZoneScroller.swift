@@ -193,11 +193,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     // Tap detection for middle click
     private var touchStartTime: Double = 0
     private var touchStartPosition: CGPoint = .zero
-    private var maxTouchDisplacement: CGFloat = 0
     private let tapMaxDuration: Double = 0.3      // 300ms
     private let tapMaxMovement: CGFloat = 0.05    // 5% of trackpad
-    private let softRightClickMaxDuration: Double = 0.22
-    private let softRightClickMaxMovement: CGFloat = 0.018
 
     // MARK: - Adaptive Bayesian Tuning State
 
@@ -326,6 +323,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
     enum CornerAction: String, CaseIterable, LocalizedNameProvider {
         case none = "none"
+        case rightClick = "rightClick"
         case missionControl = "missionControl"
         case appWindows = "appWindows"
         case showDesktop = "showDesktop"
@@ -335,6 +333,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         var localizedName: String {
             switch self {
             case .none: String(localized: "No Action")
+            case .rightClick: String(localized: "Right Click")
             case .missionControl: String(localized: "Mission Control")
             case .appWindows: String(localized: "App Windows")
             case .showDesktop: String(localized: "Show Desktop")
@@ -439,8 +438,6 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 // Record for tap detection
                 touchStartTime = timestamp
                 touchStartPosition = position
-                maxTouchDisplacement = 0
-
                 let preliminaryZone = determineZone(position)
                 currentZone = preliminaryZone
 
@@ -482,12 +479,6 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                     x: position.x - lastTouchPosition.x,
                     y: position.y - lastTouchPosition.y
                 )
-                let displacement = hypot(
-                    position.x - touchStartPosition.x,
-                    position.y - touchStartPosition.y
-                )
-                maxTouchDisplacement = max(maxTouchDisplacement, displacement)
-
                 // Calculate instantaneous velocity
                 let dt = timestamp - lastTouchTime
                 if dt > 0 {
@@ -659,7 +650,6 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         velocityHistory.removeAll()
         scrollAccumulatorX = 0
         scrollAccumulatorY = 0
-        maxTouchDisplacement = 0
         hasEmittedScrollBegan = false
         isActivelyScrollingInZone = false
     }
@@ -1404,8 +1394,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         // x: 0 = left, 1 = right
         // y: 0 = bottom (near user), 1 = top (away from user)
 
-        // Check corners first (highest priority).
-        // Special case: bottom-right + No Action means "soft right-click" mode.
+        // Check corners first (highest priority)
         if cornerTriggerEnabled {
             let isLeft = position.x < cornerTriggerZoneSize
             let isRight = position.x > (1.0 - cornerTriggerZoneSize)
@@ -1430,10 +1419,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 if action != .none {
                     return zone
                 }
-                if zone == .bottomRightCorner {
-                    return .bottomRightCorner
-                }
-                // Unassigned non-bottom-right corners preserve native behavior.
+                // Unassigned corners preserve native behavior.
                 return .center
             }
         }
@@ -1694,22 +1680,6 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         // Get the action for this corner
         let action = cornerActions[zone] ?? .none
 
-        // Bottom-right "No Action" is intentionally repurposed as soft right-click.
-        if zone == .bottomRightCorner && action == .none {
-            guard duration < softRightClickMaxDuration,
-                  movement < softRightClickMaxMovement,
-                  maxTouchDisplacement < softRightClickMaxMovement else {
-                LogManager.shared.log(String(
-                    format: "Soft right-click suppressed (duration=%.3f movement=%.4f maxDisp=%.4f)",
-                    duration, movement, maxTouchDisplacement
-                ))
-                return
-            }
-            postRightClickEvent()
-            LogManager.shared.log("Soft right-click triggered")
-            return
-        }
-
         guard action != .none else {
             return
         }
@@ -1745,6 +1715,10 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         switch action {
         case .none:
             break
+
+        case .rightClick:
+            postRightClickEvent()
+            LogManager.shared.log("Right click triggered")
 
         case .missionControl:
             // Use private CoreDock API
