@@ -189,6 +189,9 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private let horizontalActivationMinMovement: CGFloat = 0.0065 // avoid tiny-jitter horizontal activation
     private let horizontalTapGuardMovement: CGFloat = 0.0060  // treat tiny jitter as click intent
     private let horizontalTapGuardFrames: Int = 3
+    private var horizontalScrollLockUntilUptimeNs: UInt64 = 0
+    private var hasLoggedHorizontalLockSuppressionInTouch: Bool = false
+    private let rightClickHorizontalScrollLockDuration: Double = 0.30  // 300ms cooldown
 
     // Tap detection for middle click
     private var touchStartTime: Double = 0
@@ -650,6 +653,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         velocityHistory.removeAll()
         scrollAccumulatorX = 0
         scrollAccumulatorY = 0
+        hasLoggedHorizontalLockSuppressionInTouch = false
         hasEmittedScrollBegan = false
         isActivelyScrollingInZone = false
     }
@@ -694,19 +698,20 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             // Determine which adjacent edges are available
             let adjacentHorizontal: ScrollZone?
             let adjacentVertical: ScrollZone?
+            let horizontalScrollLocked = isHorizontalScrollTemporarilyLocked()
 
             switch currentZone {
             case .bottomLeftCorner:
-                adjacentHorizontal = (horizontalPosition == .bottom) ? .bottomEdge : nil
+                adjacentHorizontal = (!horizontalScrollLocked && horizontalPosition == .bottom) ? .bottomEdge : nil
                 adjacentVertical = (verticalEdgeMode == .left || verticalEdgeMode == .both) ? .leftEdge : nil
             case .bottomRightCorner:
-                adjacentHorizontal = (horizontalPosition == .bottom) ? .bottomEdge : nil
+                adjacentHorizontal = (!horizontalScrollLocked && horizontalPosition == .bottom) ? .bottomEdge : nil
                 adjacentVertical = (verticalEdgeMode == .right || verticalEdgeMode == .both) ? .rightEdge : nil
             case .topLeftCorner:
-                adjacentHorizontal = (horizontalPosition == .top) ? .topEdge : nil
+                adjacentHorizontal = (!horizontalScrollLocked && horizontalPosition == .top) ? .topEdge : nil
                 adjacentVertical = (verticalEdgeMode == .left || verticalEdgeMode == .both) ? .leftEdge : nil
             case .topRightCorner:
-                adjacentHorizontal = (horizontalPosition == .top) ? .topEdge : nil
+                adjacentHorizontal = (!horizontalScrollLocked && horizontalPosition == .top) ? .topEdge : nil
                 adjacentVertical = (verticalEdgeMode == .right || verticalEdgeMode == .both) ? .rightEdge : nil
             default:
                 adjacentHorizontal = nil
@@ -764,6 +769,18 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         default:
             return false
         }
+    }
+
+    private func isHorizontalScrollTemporarilyLocked() -> Bool {
+        DispatchTime.now().uptimeNanoseconds < horizontalScrollLockUntilUptimeNs
+    }
+
+    private func engageHorizontalScrollLockAfterRightClick() {
+        let now = DispatchTime.now().uptimeNanoseconds
+        let durationNs = UInt64(rightClickHorizontalScrollLockDuration * 1_000_000_000)
+        horizontalScrollLockUntilUptimeNs = max(now, horizontalScrollLockUntilUptimeNs) + durationNs
+        LogManager.shared.log(String(format: "Horizontal scroll locked for %.0fms after right click",
+                                     rightClickHorizontalScrollLockDuration * 1000))
     }
 
     /// Compute initial Bayesian prior from how deep the touch is within the zone
@@ -1466,12 +1483,21 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         }
 
         // Check horizontal scrolling zone based on position
+        let horizontalScrollLocked = isHorizontalScrollTemporarilyLocked()
         if horizontalPosition == .bottom {
             if position.y < bottomZoneHeight {
+                if horizontalScrollLocked {
+                    LogManager.shared.log("Horizontal zone suppressed by right-click cooldown")
+                    return .center
+                }
                 return .bottomEdge
             }
         } else {
             if position.y > (1.0 - bottomZoneHeight) {
+                if horizontalScrollLocked {
+                    LogManager.shared.log("Horizontal zone suppressed by right-click cooldown")
+                    return .center
+                }
                 return .topEdge
             }
         }
@@ -1527,6 +1553,14 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             isActivelyScrollingInZone = true
 
         case .bottomEdge, .topEdge:
+            if isHorizontalScrollTemporarilyLocked() {
+                if !hasLoggedHorizontalLockSuppressionInTouch {
+                    hasLoggedHorizontalLockSuppressionInTouch = true
+                    LogManager.shared.log("Horizontal scroll suppressed by right-click cooldown")
+                }
+                isActivelyScrollingInZone = false
+                return
+            }
             // Horizontal scrolling - use X delta
             // Trackpad +X and screen +X both point right, so no sign inversion needed
             // (unlike vertical where trackpad +Y=up but screen +Y=down)
@@ -1718,6 +1752,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
         case .rightClick:
             postRightClickEvent()
+            engageHorizontalScrollLockAfterRightClick()
             LogManager.shared.log("Right click triggered")
 
         case .missionControl:
