@@ -185,12 +185,19 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private let directionCoherenceThreshold: CGFloat = 0.40
     private let minActivationMovement: CGFloat = 0.003
     private let minActivationVelocity: CGFloat = 0.08  // normalized units/sec on scroll axis
+    private let cornerPromotionMinMovement: CGFloat = 0.010   // require clearer intent from corners
+    private let horizontalActivationMinMovement: CGFloat = 0.0065 // avoid tiny-jitter horizontal activation
+    private let horizontalTapGuardMovement: CGFloat = 0.0060  // treat tiny jitter as click intent
+    private let horizontalTapGuardFrames: Int = 3
 
     // Tap detection for middle click
     private var touchStartTime: Double = 0
     private var touchStartPosition: CGPoint = .zero
+    private var maxTouchDisplacement: CGFloat = 0
     private let tapMaxDuration: Double = 0.3      // 300ms
     private let tapMaxMovement: CGFloat = 0.05    // 5% of trackpad
+    private let softRightClickMaxDuration: Double = 0.22
+    private let softRightClickMaxMovement: CGFloat = 0.018
 
     // MARK: - Adaptive Bayesian Tuning State
 
@@ -432,6 +439,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 // Record for tap detection
                 touchStartTime = timestamp
                 touchStartPosition = position
+                maxTouchDisplacement = 0
 
                 let preliminaryZone = determineZone(position)
                 currentZone = preliminaryZone
@@ -474,6 +482,11 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                     x: position.x - lastTouchPosition.x,
                     y: position.y - lastTouchPosition.y
                 )
+                let displacement = hypot(
+                    position.x - touchStartPosition.x,
+                    position.y - touchStartPosition.y
+                )
+                maxTouchDisplacement = max(maxTouchDisplacement, displacement)
 
                 // Calculate instantaneous velocity
                 let dt = timestamp - lastTouchTime
@@ -565,6 +578,9 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 handleMiddleClickTap(endPosition: lastTouchPosition, endTime: timestamp)
             } else if isCornerZone(currentZone) {
                 handleCornerTap(zone: currentZone, endPosition: lastTouchPosition, endTime: timestamp)
+            } else if isScrollActivationPending && isScrollZone(currentZone) {
+                // Touch ended before activation completed: treat as click/no-scroll.
+                LogManager.shared.log("Touch released during activation pending → suppress scroll")
             } else {
                 // Send scroll phase ended event before starting inertia
                 if hasEmittedScrollBegan {
@@ -581,6 +597,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
     private func startInertiaIfNeeded() {
         guard isTracking, currentZone != .none, currentZone != .center else { return }
+        guard !isScrollActivationPending else { return }
+        guard hasEmittedScrollBegan else { return }
         guard !velocityHistory.isEmpty else { return }
 
         // Calculate average velocity from recent history
@@ -641,6 +659,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         velocityHistory.removeAll()
         scrollAccumulatorX = 0
         scrollAccumulatorY = 0
+        maxTouchDisplacement = 0
         hasEmittedScrollBegan = false
         isActivelyScrollingInZone = false
     }
@@ -678,7 +697,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         //       Promoting to rightEdge would be nonsensical.
         if isCornerZone(currentZone) {
             let totalMovement = totalRawDx + totalRawDy
-            if totalMovement < minActivationMovement {
+            if totalMovement < cornerPromotionMinMovement {
                 return .needMoreFrames
             }
 
@@ -864,12 +883,19 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             let totalDy = activationDeltas.reduce(0) { $0 + abs($1.y) }
             let totalMovement = totalDx + totalDy
             
-            // CLICK DETECTION: Only trigger on TRULY minimal movement (< 0.003)
-            // This catches actual click attempts without interfering with slow scrolls
-            if activationFrames.count <= 2 && totalMovement < 0.003 {
-                // Very minimal movement - possible click, but don't be too aggressive
-                // Just add a small delay rather than reducing confidence significantly
-                LogManager.shared.log(String(format: "Horizontal: minimal movement (%.4f), watching for click intent", totalMovement))
+            // Click-guard: absorb tiny bottom-edge jitter during right-click press/release.
+            // We postpone activation for the first few frames until movement is clearer.
+            if activationFrames.count <= horizontalTapGuardFrames &&
+                totalMovement < horizontalTapGuardMovement {
+                LogManager.shared.log(String(format: "Horizontal tap-guard: tiny movement (%.4f), waiting", totalMovement))
+                return .needMoreFrames
+            }
+
+            // Extra safeguard: do not activate horizontal scrolling on very small
+            // cumulative movement (common during right-click press/release jitter).
+            if activationFrames.count <= 4 && totalMovement < horizontalActivationMinMovement {
+                LogManager.shared.log(String(format: "Horizontal activation guard: insufficient movement (%.4f), waiting", totalMovement))
+                return .needMoreFrames
             }
             
             // If vertical movement is clearly dominant (off-axis speed > on-axis speed * 2.0),
@@ -1378,17 +1404,38 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         // x: 0 = left, 1 = right
         // y: 0 = bottom (near user), 1 = top (away from user)
 
-        // Check corners first (highest priority)
+        // Check corners first (highest priority).
+        // Special case: bottom-right + No Action means "soft right-click" mode.
         if cornerTriggerEnabled {
             let isLeft = position.x < cornerTriggerZoneSize
             let isRight = position.x > (1.0 - cornerTriggerZoneSize)
             let isTop = position.y > (1.0 - cornerTriggerZoneSize)
             let isBottom = position.y < cornerTriggerZoneSize
 
-            if isTop && isLeft { return .topLeftCorner }
-            if isTop && isRight { return .topRightCorner }
-            if isBottom && isLeft { return .bottomLeftCorner }
-            if isBottom && isRight { return .bottomRightCorner }
+            let cornerZone: ScrollZone?
+            if isTop && isLeft {
+                cornerZone = .topLeftCorner
+            } else if isTop && isRight {
+                cornerZone = .topRightCorner
+            } else if isBottom && isLeft {
+                cornerZone = .bottomLeftCorner
+            } else if isBottom && isRight {
+                cornerZone = .bottomRightCorner
+            } else {
+                cornerZone = nil
+            }
+
+            if let zone = cornerZone {
+                let action = cornerActions[zone] ?? .none
+                if action != .none {
+                    return zone
+                }
+                if zone == .bottomRightCorner {
+                    return .bottomRightCorner
+                }
+                // Unassigned non-bottom-right corners preserve native behavior.
+                return .center
+            }
         }
 
         // Calculate middle click zone boundaries
@@ -1645,11 +1692,53 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         }
 
         // Get the action for this corner
-        guard let action = cornerActions[zone], action != .none else {
+        let action = cornerActions[zone] ?? .none
+
+        // Bottom-right "No Action" is intentionally repurposed as soft right-click.
+        if zone == .bottomRightCorner && action == .none {
+            guard duration < softRightClickMaxDuration,
+                  movement < softRightClickMaxMovement,
+                  maxTouchDisplacement < softRightClickMaxMovement else {
+                LogManager.shared.log(String(
+                    format: "Soft right-click suppressed (duration=%.3f movement=%.4f maxDisp=%.4f)",
+                    duration, movement, maxTouchDisplacement
+                ))
+                return
+            }
+            postRightClickEvent()
+            LogManager.shared.log("Soft right-click triggered")
+            return
+        }
+
+        guard action != .none else {
             return
         }
 
         executeCornerAction(action)
+    }
+
+    private func postRightClickEvent() {
+        let mouseLocation = NSEvent.mouseLocation
+        let screenHeight = NSScreen.main?.frame.height ?? 0
+        let cgPoint = CGPoint(x: mouseLocation.x, y: screenHeight - mouseLocation.y)
+
+        if let downEvent = CGEvent(
+            mouseEventSource: nil,
+            mouseType: .rightMouseDown,
+            mouseCursorPosition: cgPoint,
+            mouseButton: .right
+        ) {
+            downEvent.post(tap: .cghidEventTap)
+        }
+
+        if let upEvent = CGEvent(
+            mouseEventSource: nil,
+            mouseType: .rightMouseUp,
+            mouseCursorPosition: cgPoint,
+            mouseButton: .right
+        ) {
+            upEvent.post(tap: .cghidEventTap)
+        }
     }
 
     private func executeCornerAction(_ action: CornerAction) {
