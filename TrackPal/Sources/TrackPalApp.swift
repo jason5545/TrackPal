@@ -24,6 +24,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSLog("TrackPal: Starting...")
 
+        // Prevent sudden termination — menu bar app must stay alive
+        // even when the popup window is closed
+        NSApp.setActivationPolicy(.accessory)
+
         // Load saved settings
         Settings.shared.loadSettings()
 
@@ -43,6 +47,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         TrackpadZoneScroller.shared.saveAdaptiveState()
+    }
+
+    @MainActor func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Menu bar app should not terminate when popup closes
+        TrackpadZoneScroller.shared.saveAdaptiveState()
+        return .terminateCancel
     }
 
     nonisolated func isAccessibilityEnabled() -> Bool {
