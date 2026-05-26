@@ -46,12 +46,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        TrackpadZoneScroller.shared.saveAdaptiveState()
     }
 
     @MainActor func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // Menu bar app should not terminate when popup closes
-        TrackpadZoneScroller.shared.saveAdaptiveState()
         return .terminateCancel
     }
 
@@ -295,9 +293,6 @@ final class Settings {
         scroller.lightTouchDensityThreshold = lightTouchDensityThreshold
         scroller.largeTouchMajorAxisThreshold = largeTouchMajorAxisThreshold
         scroller.largeTouchMinorAxisThreshold = largeTouchMinorAxisThreshold
-
-        // Load adaptive Bayesian tuning state
-        scroller.loadAdaptiveState()
 
         NSLog("TrackPal: Settings loaded - enabled=\(isEnabled), middleClick=\(middleClickEnabled), filterLight=\(filterLightTouches), filterLarge=\(filterLargeTouches)")
     }

@@ -178,7 +178,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private var activationFrames: [(x: CGFloat, y: CGFloat)] = []
     private var activationDeltas: [CGPoint] = []
     private var activationDensities: [Float] = []  // density per delta frame
-    private var activationConfidence: CGFloat = 0   // Bayesian confidence for horizontal zones
+    private var activationConfidence: CGFloat = 0   // diagnostic activation confidence
     private var currentTouchDensity: Float = 0      // latest density from processFilteredTouch
     private let activationFramesNeeded = 2
     private let activationMaxFrames = 8           // max wait when barely moving
@@ -198,8 +198,13 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private var touchStartPosition: CGPoint = .zero
     private let tapMaxDuration: Double = 0.3      // 300ms
     private let tapMaxMovement: CGFloat = 0.05    // 5% of trackpad
+    private let forcePressMaxDuration: Double = 1.0
+    private var forcePressSatisfied: Bool = false
+    private var forcePressMaxForce: Float = 0
+    private var forcePressSource: String = "none"
+    private let forcePressThreshold: Float = 100.0
 
-    // MARK: - Adaptive Bayesian Tuning State
+    // MARK: - Legacy Adaptive Tuning State
 
     /// Learned direction center (EMA of on-axis ratios from successful activations)
     private var learnedDirectionCenterH: CGFloat = 0.50
@@ -390,6 +395,12 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
             // Use the refcon variant for better compatibility
             MTRegisterContactFrameCallbackWithRefcon(device, touchCallbackWithRefcon, nil)
+            if MTDeviceSupportsForce(device) {
+                MTRegisterForceCentroidCallbackWithRefcon(device, forceCentroidCallbackWithRefcon, nil)
+                LogManager.shared.log("Device \(i) supports force, registered force callback")
+            } else {
+                LogManager.shared.log("Device \(i) does not support force; force-gated actions unavailable")
+            }
             MTDeviceStart(device, 0)
             LogManager.shared.log("Device \(i) started")
         }
@@ -408,6 +419,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         ScrollEventInterceptor.shared.stop()
 
         for device in devices {
+            MTUnregisterForceCentroidCallback(device, forceCentroidCallbackWithRefcon)
             MTDeviceStop(device)
         }
 
@@ -441,25 +453,24 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 // Record for tap detection
                 touchStartTime = timestamp
                 touchStartPosition = position
+                forcePressSatisfied = false
+                forcePressMaxForce = 0
+                forcePressSource = "none"
                 let preliminaryZone = determineZone(position)
                 currentZone = preliminaryZone
 
                 if isScrollZone(preliminaryZone) {
                     // Cancel any running inertia from a previous scroll direction
                     DispatchQueue.main.async { InertiaScroller.shared.stopInertia() }
-                    // Check if this is a retry after a recent miss
-                    checkForRetry(zone: preliminaryZone)
-                    // All scroll zone touches enter activation pending
+                    // Normal edge scrolling does not require force.
                     isScrollActivationPending = true
                     activationOriginalZone = preliminaryZone
                     activationFrames = [(x: position.x, y: position.y)]
                     activationDeltas = []
                     activationDensities = []
-                    activationConfidence = computeZonePrior(zone: preliminaryZone, position: position)
-                    // Suppress system scroll events during activation evaluation
-                    // to prevent cursor movement before scroll starts
+                    activationConfidence = 0
                     isActivelyScrollingInZone = true
-                    LogManager.shared.log(String(format: "Touch started at (%.2f, %.2f) zone: \(preliminaryZone) [ACTIVATING]", x, y))
+                    LogManager.shared.log(String(format: "Touch started at (%.2f, %.2f) zone: \(preliminaryZone) [SCROLL-PENDING]", x, y))
                 } else if isCornerZone(preliminaryZone) {
                     // Cancel any running inertia from a previous scroll direction
                     DispatchQueue.main.async { InertiaScroller.shared.stopInertia() }
@@ -557,6 +568,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                                     LogManager.shared.log("Scroll timeout → center")
                                 }
                             }
+
                         }
                     }
                 } else {
@@ -573,8 +585,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             } else if isCornerZone(currentZone) {
                 handleCornerTap(zone: currentZone, endPosition: lastTouchPosition, endTime: timestamp)
             } else if isScrollActivationPending && isScrollZone(currentZone) {
-                // Touch ended before activation completed: treat as click/no-scroll.
-                LogManager.shared.log("Touch released during activation pending → suppress scroll")
+                LogManager.shared.log("Touch released during scroll activation pending → no scroll")
             } else {
                 // Send scroll phase ended event before starting inertia
                 if hasEmittedScrollBegan {
@@ -655,6 +666,9 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         scrollAccumulatorY = 0
         hasLoggedHorizontalLockSuppressionInTouch = false
         hasEmittedScrollBegan = false
+        forcePressSatisfied = false
+        forcePressMaxForce = 0
+        forcePressSource = "none"
         isActivelyScrollingInZone = false
     }
 
@@ -749,16 +763,13 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             currentZone = promotedZone
             LogManager.shared.log("Corner promoted → \(promotedZone)")
 
-            // Initialize Bayesian prior for the promoted zone
-            if let startPos = activationFrames.first {
-                let pos = CGPoint(x: startPos.x, y: startPos.y)
-                activationConfidence = computeZonePrior(zone: promotedZone, position: pos)
-            }
+            activationConfidence = 0
             // Fall through to normal scroll evaluation with the new zone
         }
 
-        // --- All scroll zones use Bayesian confidence model ---
-        return evaluateScrollIntentBayesian()
+        // Normal edge scrolling activates from movement. Force is reserved for
+        // tap-style actions such as middle click and corner triggers.
+        return .activated
     }
 
     /// Check if a zone is a horizontal scroll zone
@@ -783,178 +794,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                                      rightClickHorizontalScrollLockDuration * 1000))
     }
 
-    /// Compute initial Bayesian prior from how deep the touch is within the zone
-    private func computeZonePrior(zone: ScrollZone, position: CGPoint) -> CGFloat {
-        let basePrior: CGFloat = 0.50
-        let priorRange: CGFloat = 0.35  // max additional prior from zone depth
-
-        let depth: CGFloat
-        switch zone {
-        case .bottomEdge:
-            depth = max(0, bottomZoneHeight - position.y) / bottomZoneHeight
-        case .topEdge:
-            depth = max(0, position.y - (1.0 - bottomZoneHeight)) / bottomZoneHeight
-        case .leftEdge:
-            depth = max(0, edgeZoneWidth - position.x) / edgeZoneWidth
-        case .rightEdge:
-            depth = max(0, position.x - (1.0 - edgeZoneWidth)) / edgeZoneWidth
-        default:
-            depth = 0
-        }
-        return basePrior + depth * priorRange  // range: 0.50 ~ 0.85
-    }
-
-    /// Bayesian confidence evaluation for horizontal zones (bottomEdge/topEdge)
-    private func evaluateScrollIntentBayesian() -> ScrollIntentResult {
-        guard !activationDeltas.isEmpty else { return .needMoreFrames }
-
-        // Use the latest delta for this frame's evidence
-        let delta = activationDeltas.last!
-        let density = activationDensities.last ?? 0.05
-
-        // --- Quality weight from density ---
-        // Low density (edge touches) = unreliable direction data
-        // qualityWeight: 0.3 (density=0.02) to 1.0 (density>=0.10)
-        let qualityWeight = CGFloat(min(max((density - 0.02) / 0.08, 0.0), 1.0)) * 0.7 + 0.3
-
-        // --- Direction evidence ---
-        // Compute on-axis ratio with aspect ratio compensation
-        let absDx = abs(delta.x) * 1.6  // aspect compensation
-        let absDy = abs(delta.y)
-        let total = absDx + absDy
-        guard total > 0.0005 else {
-            // Movement too small to determine direction — no update
-            return activationConfidence >= 0.80 ? .activated : .needMoreFrames
-        }
-
-        let onAxisRatio: CGFloat  // how much movement is on the expected scroll axis
-        switch currentZone {
-        case .bottomEdge, .topEdge:
-            onAxisRatio = absDx / total
-        default:
-            onAxisRatio = absDy / total
-        }
-
-        // Direction boost: positive when on-axis dominant, negative when off-axis
-        // Uses learned direction center (adaptive) instead of hardcoded 0.50
-        let center = isHorizontalZone(currentZone) ? learnedDirectionCenterH : learnedDirectionCenterV
-        let deviation = onAxisRatio - center
-        let directionBoost: CGFloat
-        if abs(deviation) <= directionDeadZone {
-            directionBoost = 0.0  // dead zone — no boost
-        } else if deviation > directionDeadZone {
-            // Positive boost: linear from dead zone edge to max
-            directionBoost = (deviation - directionDeadZone) / (1.0 - center - directionDeadZone) * 0.275
-        } else {
-            // Negative boost: linear from dead zone edge to max negative
-            directionBoost = (deviation + directionDeadZone) / (center - directionDeadZone) * 0.25
-        }
-
-        // --- Velocity evidence ---
-        let latestV = velocityHistory.last
-        let onAxisSpeed: CGFloat
-        let offAxisSpeed: CGFloat
-        switch currentZone {
-        case .bottomEdge, .topEdge:
-            onAxisSpeed = abs(latestV?.vx ?? 0)
-            offAxisSpeed = abs(latestV?.vy ?? 0)
-        default:
-            onAxisSpeed = abs(latestV?.vy ?? 0)
-            offAxisSpeed = abs(latestV?.vx ?? 0)
-        }
-        let velocityBoost: CGFloat
-        if onAxisSpeed > 0.30      { velocityBoost = 0.10 }
-        else if onAxisSpeed > 0.15 { velocityBoost = 0.05 }
-        else if onAxisSpeed > 0.05 { velocityBoost = 0.02 }
-        else                       { velocityBoost = 0.00 }
-
-        // --- Update confidence ---
-        // Cap per-frame drop to prevent a single noisy frame from killing momentum
-        let update = (directionBoost + velocityBoost) * qualityWeight
-        activationConfidence += max(update, -0.20)
-        activationConfidence = min(max(activationConfidence, 0.0), 1.0)
-
-        // --- Effective threshold with retry bonus ---
-        let retryBonus = isHorizontalZone(currentZone) ? retryBonusH : retryBonusV
-        // Use consistent threshold for both horizontal and vertical zones
-        // Retry bonus helps users who struggle with activation
-        let effectiveThreshold = max(0.75 - retryBonus, 0.67)
-
-        // --- Horizontal zone additional rejection criteria ---
-        // For horizontal zones, if off-axis (vertical) velocity is high relative to on-axis,
-        // it indicates the user is trying to scroll vertically, not horizontally.
-        // This is a common false positive when touching the bottom edge.
-        if isHorizontalZone(currentZone) {
-            // Calculate total movement so far to detect click vs scroll intent
-            let totalDx = activationDeltas.reduce(0) { $0 + abs($1.x) }
-            let totalDy = activationDeltas.reduce(0) { $0 + abs($1.y) }
-            let totalMovement = totalDx + totalDy
-            
-            // Click-guard: absorb tiny bottom-edge jitter during right-click press/release.
-            // We postpone activation for the first few frames until movement is clearer.
-            if activationFrames.count <= horizontalTapGuardFrames &&
-                totalMovement < horizontalTapGuardMovement {
-                LogManager.shared.log(String(format: "Horizontal tap-guard: tiny movement (%.4f), waiting", totalMovement))
-                return .needMoreFrames
-            }
-
-            // Extra safeguard: do not activate horizontal scrolling on very small
-            // cumulative movement (common during right-click press/release jitter).
-            if activationFrames.count <= 4 && totalMovement < horizontalActivationMinMovement {
-                LogManager.shared.log(String(format: "Horizontal activation guard: insufficient movement (%.4f), waiting", totalMovement))
-                return .needMoreFrames
-            }
-            
-            // If vertical movement is clearly dominant (off-axis speed > on-axis speed * 2.0),
-            // and we're still in early frames, this is likely a vertical scroll attempt
-            // Use 2.0 instead of 1.8 to be more lenient for genuine horizontal scrolls
-            if offAxisSpeed > onAxisSpeed * 2.0 && activationFrames.count <= 3 {
-                LogManager.shared.log(String(format: "Horizontal zone rejected: vertical dominant (vx=%.3f, vy=%.3f)", onAxisSpeed, offAxisSpeed))
-                return .rejected
-            }
-            
-            // Check on-axis ratio - but only reject if it's VERY low (< 0.35)
-            // and we have enough frames to be confident (>= 2)
-            if onAxisRatio < 0.35 && activationFrames.count >= 2 {
-                LogManager.shared.log(String(format: "Horizontal zone rejected: low on-axis ratio (%.3f)", onAxisRatio))
-                return .rejected
-            }
-            
-            // MINIMUM DISTANCE CHECK: Relaxed threshold for more natural feel
-            // Only apply after several frames to avoid blocking initial activation
-            let minHorizontalMovement: CGFloat = 0.008  // ~0.8% of trackpad width
-            if activationDeltas.count >= 4 && totalDx < minHorizontalMovement && onAxisRatio < 0.70 {
-                LogManager.shared.log(String(format: "Horizontal zone rejected: insufficient horizontal movement (%.4f)", totalDx))
-                return .rejected
-            }
-            
-            // CUMULATIVE DIRECTION CONSISTENCY: Relaxed to allow more natural scrolling
-            // Only check after 4+ frames and require very low ratio to reject
-            if activationDeltas.count >= 4 {
-                let cumTotalDx = activationDeltas.reduce(0) { $0 + abs($1.x) } * 1.6
-                let cumTotalDy = activationDeltas.reduce(0) { $0 + abs($1.y) }
-                let cumTotal = cumTotalDx + cumTotalDy
-                if cumTotal > 0.001 {
-                    let cumOnAxisRatio = cumTotalDx / cumTotal
-                    // Only reject if clearly inconsistent (ratio < 0.45)
-                    if cumOnAxisRatio < 0.45 {
-                        LogManager.shared.log(String(format: "Horizontal zone rejected: cumulative direction inconsistent (%.3f)", cumOnAxisRatio))
-                        return .rejected
-                    }
-                }
-            }
-        }
-
-        LogManager.shared.log(String(format: "Bayesian confidence=%.3f (dir=%.3f vel=%.3f qw=%.2f density=%.3f center=%.3f thresh=%.3f frames=%d)",
-            activationConfidence, directionBoost, velocityBoost, qualityWeight, density, center, effectiveThreshold, activationDeltas.count))
-
-        // --- Decision ---
-        if activationConfidence >= effectiveThreshold { return .activated }
-        if activationConfidence <= 0.20 { return .rejected }
-        return .needMoreFrames
-    }
-
-    // MARK: - Adaptive Learning Methods
+    // MARK: - Activation Helpers
 
     /// Categorize a scroll zone as horizontal, vertical, or none
     private func zoneCategory(for zone: ScrollZone) -> ZoneCategory {
@@ -968,74 +808,10 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         }
     }
 
-    /// Record a successful scroll activation — updates direction center EMA and retry bonus
+    /// Record a successful scroll activation.
     private func recordSuccessfulActivation() {
-        let isH = isHorizontalZone(currentZone)
-
-        // Collect on-axis ratios from activation deltas for direction center EMA
-        for (index, delta) in activationDeltas.enumerated() {
-            let absDx = abs(delta.x) * 1.6
-            let absDy = abs(delta.y)
-            let total = absDx + absDy
-            guard total > 0.0005 else { continue }
-
-            let ratio: CGFloat
-            if isH {
-                ratio = absDx / total
-            } else {
-                ratio = absDy / total
-            }
-            onAxisRatioBuffer.append((isHorizontal: isH, ratio: ratio))
-        }
-
-        // Flush EMA periodically (every 5 samples)
-        let samplesForType = onAxisRatioBuffer.filter { $0.isHorizontal == isH }
-        if samplesForType.count >= 5 {
-            let alpha: CGFloat = 0.02
-            for sample in samplesForType {
-                if sample.isHorizontal {
-                    learnedDirectionCenterH += alpha * (sample.ratio - learnedDirectionCenterH)
-                    learnedDirectionCenterH = min(max(learnedDirectionCenterH, 0.40), 0.55)
-                } else {
-                    learnedDirectionCenterV += alpha * (sample.ratio - learnedDirectionCenterV)
-                    learnedDirectionCenterV = min(max(learnedDirectionCenterV, 0.40), 0.55)
-                }
-            }
-            onAxisRatioBuffer.removeAll { $0.isHorizontal == isH }
-            LogManager.shared.log(String(format: "Direction center EMA: H=%.4f V=%.4f", learnedDirectionCenterH, learnedDirectionCenterV))
-        }
-
-        // Check if this activation was a retry (touch started soon after a miss in same zone)
-        let cat = zoneCategory(for: currentZone)
-        if cat == lastMissZoneCategory && lastMissTimestamp > 0 {
-            let elapsed = CACurrentMediaTime() - lastMissTimestamp
-            if elapsed < 2.0 {
-                if cat == .horizontal {
-                    retryCountH += 1
-                } else {
-                    retryCountV += 1
-                }
-            }
-        }
-        lastMissZoneCategory = .none
-        lastMissTimestamp = 0
-
-        // Decay retry bonus on success (self-correcting)
-        if isH {
-            retryBonusH *= 0.995
-        } else {
-            retryBonusV *= 0.995
-        }
-
-        // Start tracking this scroll session for false activation detection
+        activationConfidence = 1.0
         startScrollSessionTracking()
-
-        // Persistence throttle
-        learningEventCount += 1
-        if learningEventCount >= 20 {
-            saveAdaptiveState()
-            learningEventCount = 0
-        }
     }
 
     // MARK: - False Activation Detection Methods
@@ -1045,8 +821,6 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         guard isScrollZone(currentZone) else { return }
 
         // Calculate activation metrics
-        let absDx = activationDeltas.last?.x ?? 0
-        let absDy = activationDeltas.last?.y ?? 0
         let totalDx = activationDeltas.reduce(0) { $0 + abs($1.x) } * 1.6
         let totalDy = activationDeltas.reduce(0) { $0 + abs($1.y) }
         let total = totalDx + totalDy
@@ -1167,33 +941,6 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
     /// Record a missed scroll (rejection or timeout)
     private func recordActivationFailure() {
-        let cat = zoneCategory(for: isCornerZone(activationOriginalZone) ? currentZone : activationOriginalZone)
-        guard cat != .none else { return }
-
-        lastMissZoneCategory = cat
-        lastMissTimestamp = CACurrentMediaTime()
-
-        if cat == .horizontal {
-            missCountH += 1
-        } else {
-            missCountV += 1
-        }
-
-        // Halve counters to prevent overflow
-        if cat == .horizontal && (retryCountH + missCountH) > 1000 {
-            retryCountH /= 2
-            missCountH /= 2
-        }
-        if cat == .vertical && (retryCountV + missCountV) > 1000 {
-            retryCountV /= 2
-            missCountV /= 2
-        }
-
-        learningEventCount += 1
-        if learningEventCount >= 20 {
-            saveAdaptiveState()
-            learningEventCount = 0
-        }
     }
 
     /// Check if a new touch is a retry after a recent miss, and update retry bonus
@@ -1235,40 +982,9 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     // MARK: - Adaptive State Persistence
 
     func saveAdaptiveState() {
-        let defaults = UserDefaults.standard
-        defaults.set(Double(learnedDirectionCenterH), forKey: "adaptive_dirCenterH")
-        defaults.set(Double(learnedDirectionCenterV), forKey: "adaptive_dirCenterV")
-        defaults.set(retryCountH, forKey: "adaptive_retryCountH")
-        defaults.set(missCountH, forKey: "adaptive_missCountH")
-        defaults.set(retryCountV, forKey: "adaptive_retryCountV")
-        defaults.set(missCountV, forKey: "adaptive_missCountV")
-        defaults.set(Double(retryBonusH), forKey: "adaptive_retryBonusH")
-        defaults.set(Double(retryBonusV), forKey: "adaptive_retryBonusV")
-        LogManager.shared.log(String(format: "Adaptive state saved: centerH=%.4f centerV=%.4f bonusH=%.4f bonusV=%.4f",
-            learnedDirectionCenterH, learnedDirectionCenterV, retryBonusH, retryBonusV))
     }
 
     func loadAdaptiveState() {
-        let defaults = UserDefaults.standard
-        if let v = defaults.object(forKey: "adaptive_dirCenterH") as? Double {
-            learnedDirectionCenterH = min(max(CGFloat(v), 0.40), 0.55)
-        }
-        if let v = defaults.object(forKey: "adaptive_dirCenterV") as? Double {
-            learnedDirectionCenterV = min(max(CGFloat(v), 0.40), 0.55)
-        }
-        retryCountH = defaults.integer(forKey: "adaptive_retryCountH")
-        missCountH = defaults.integer(forKey: "adaptive_missCountH")
-        retryCountV = defaults.integer(forKey: "adaptive_retryCountV")
-        missCountV = defaults.integer(forKey: "adaptive_missCountV")
-        if let v = defaults.object(forKey: "adaptive_retryBonusH") as? Double {
-            retryBonusH = min(max(CGFloat(v), 0.0), 0.08)
-        }
-        if let v = defaults.object(forKey: "adaptive_retryBonusV") as? Double {
-            retryBonusV = min(max(CGFloat(v), 0.0), 0.08)
-        }
-        LogManager.shared.log(String(format: "Adaptive state loaded: centerH=%.4f centerV=%.4f bonusH=%.4f bonusV=%.4f retryH=%d/%d retryV=%d/%d",
-            learnedDirectionCenterH, learnedDirectionCenterV, retryBonusH, retryBonusV,
-            retryCountH, missCountH, retryCountV, missCountV))
     }
 
     /// Check if a zone is a scroll zone (edges that produce scroll events)
@@ -1404,6 +1120,65 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         }
 
         return .valid
+    }
+
+    func processForceCentroid(x: Float, y: Float, force: Float) {
+        guard isTracking else { return }
+
+        let forcePosition = CGPoint(x: CGFloat(x), y: CGFloat(y))
+
+        if currentZone == .middleClick && middleClickEnabled {
+            guard determineZone(forcePosition) == .middleClick else { return }
+            forcePressMaxForce = max(forcePressMaxForce, force)
+            if force >= forcePressThreshold {
+                markForcePressSatisfied(source: "force", position: forcePosition)
+            }
+            return
+        }
+
+        guard isCornerZone(currentZone) else { return }
+        guard isPosition(forcePosition, inCornerZone: currentZone) else { return }
+
+        forcePressMaxForce = max(forcePressMaxForce, force)
+        if force >= forcePressThreshold {
+            markForcePressSatisfied(source: "force", position: forcePosition)
+        }
+    }
+
+    private func markForcePressSatisfied(source: String, position: CGPoint) {
+        let wasSatisfied = forcePressSatisfied
+        forcePressSatisfied = true
+        forcePressSource = source
+
+        guard !wasSatisfied, isCornerZone(currentZone) else { return }
+
+        isScrollActivationPending = false
+        activationDeltas.removeAll()
+        activationDensities.removeAll()
+        isActivelyScrollingInZone = false
+
+        LogManager.shared.log(String(format: "Corner force press accepted: zone=%@ source=%@ maxForce=%.1f",
+                                     String(describing: currentZone), source, forcePressMaxForce))
+    }
+
+    private func isPosition(_ position: CGPoint, inCornerZone zone: ScrollZone) -> Bool {
+        let isLeft = position.x < cornerTriggerZoneSize
+        let isRight = position.x > (1.0 - cornerTriggerZoneSize)
+        let isTop = position.y > (1.0 - cornerTriggerZoneSize)
+        let isBottom = position.y < cornerTriggerZoneSize
+
+        switch zone {
+        case .topLeftCorner:
+            return isTop && isLeft
+        case .topRightCorner:
+            return isTop && isRight
+        case .bottomLeftCorner:
+            return isBottom && isLeft
+        case .bottomRightCorner:
+            return isBottom && isRight
+        default:
+            return false
+        }
     }
 
     private func determineZone(_ position: CGPoint) -> ScrollZone {
@@ -1652,11 +1427,20 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             endPosition.y - touchStartPosition.y
         )
 
-        // Check if it's a valid tap (short duration, minimal movement)
-        guard duration < tapMaxDuration && movement < tapMaxMovement else {
+        guard movement < tapMaxMovement else {
             return
         }
 
+        guard duration < forcePressMaxDuration else {
+            return
+        }
+
+        guard forcePressSatisfied else {
+            LogManager.shared.log(String(format: "Middle click ignored: no press signal (maxForce=%.1f)", forcePressMaxForce))
+            return
+        }
+
+        LogManager.shared.log(String(format: "Middle click press accepted: source=%@ maxForce=%.1f", forcePressSource, forcePressMaxForce))
         postMiddleClickEvent()
     }
 
@@ -1706,8 +1490,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             endPosition.y - touchStartPosition.y
         )
 
-        // Check if it's a valid tap (short duration, minimal movement)
-        guard duration < tapMaxDuration && movement < tapMaxMovement else {
+        // Check if it's a valid force tap (short-ish duration, minimal movement)
+        guard duration < forcePressMaxDuration && movement < tapMaxMovement else {
             return
         }
 
@@ -1718,6 +1502,14 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             return
         }
 
+        guard forcePressSatisfied else {
+            LogManager.shared.log(String(format: "Corner action ignored: no force press (zone=%@ maxForce=%.1f)",
+                                         String(describing: zone), forcePressMaxForce))
+            return
+        }
+
+        LogManager.shared.log(String(format: "Corner action accepted: zone=%@ source=%@ maxForce=%.1f",
+                                     String(describing: zone), forcePressSource, forcePressMaxForce))
         executeCornerAction(action)
     }
 
@@ -1895,6 +1687,23 @@ private func touchCallbackWithRefcon(
                 scroller.handleFingerCountTransition(from: prevCount, to: touchCount)
             }
         }
+    }
+}
+
+private func forceCentroidCallbackWithRefcon(
+    device: MTDeviceRef?,
+    centroid: UnsafeMutablePointer<MTForceCentroid>?,
+    refcon: UnsafeMutableRawPointer?
+) {
+    guard let centroid = centroid else { return }
+
+    let forceCentroid = centroid.pointee
+    let x = forceCentroid.normalizedX
+    let y = forceCentroid.normalizedY
+    let force = forceCentroid.force
+
+    DispatchQueue.main.async {
+        TrackpadZoneScroller.shared.processForceCentroid(x: x, y: y, force: force)
     }
 }
 

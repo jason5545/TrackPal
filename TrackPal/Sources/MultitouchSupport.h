@@ -35,20 +35,36 @@ typedef struct {
     float density;
 } MTTouch;
 
+typedef struct {
+    int deviceID;
+    int reserved0;
+    double timestamp;
+    float normalizedX;
+    float normalizedY;
+    float x;
+    float y;
+    float force;
+    int reserved1;
+} MTForceCentroid;
+
 typedef void (*MTContactCallbackFunction)(MTDeviceRef device, MTTouch *touches, int numTouches, double timestamp, int frame);
 typedef void (*MTContactCallbackFunctionWithRefcon)(MTDeviceRef device, MTTouch *touches, int numTouches, double timestamp, int frame, void *refcon);
+typedef void (*MTForceCentroidCallbackFunctionWithRefcon)(MTDeviceRef device, MTForceCentroid *centroid, void *refcon);
 
 // Functions
 CF_RETURNS_RETAINED CFArrayRef _Nullable MTDeviceCreateList(void);
 void MTRegisterContactFrameCallback(MTDeviceRef device, MTContactCallbackFunction callback);
 void MTUnregisterContactFrameCallback(MTDeviceRef device, MTContactCallbackFunction callback);
 void MTRegisterContactFrameCallbackWithRefcon(MTDeviceRef device, MTContactCallbackFunctionWithRefcon callback, void *refcon);
+void MTRegisterForceCentroidCallbackWithRefcon(MTDeviceRef device, MTForceCentroidCallbackFunctionWithRefcon callback, void *refcon);
+void MTUnregisterForceCentroidCallback(MTDeviceRef device, MTForceCentroidCallbackFunctionWithRefcon callback);
 void MTDeviceStart(MTDeviceRef device, int mode);
 void MTDeviceStop(MTDeviceRef device);
 bool MTDeviceIsRunning(MTDeviceRef device);
 int MTDeviceGetDeviceID(MTDeviceRef device);
 int MTDeviceGetFamilyID(MTDeviceRef device);
 bool MTDeviceIsBuiltIn(MTDeviceRef device);
+bool MTDeviceSupportsForce(MTDeviceRef device);
 OSStatus MTDeviceGetSensorSurfaceDimensions(MTDeviceRef device, int *width, int *height);
 
 #endif /* MultitouchSupport_h */
