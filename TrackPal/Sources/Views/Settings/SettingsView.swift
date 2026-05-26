@@ -152,12 +152,12 @@ struct SettingsView: View {
 
     private var middleClickSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-            SectionHeader(title: "Middle Click")
+            SectionHeader(title: "Force Middle Click")
 
             SettingsToggleRow(
                 icon: "hand.tap",
                 iconColor: middleClickEnabled ? DesignTokens.Colors.accentPrimary : DesignTokens.Colors.textSecondary,
-                title: "Enable Middle Click",
+                title: "Enable Force Middle Click",
                 isOn: $middleClickEnabled
             )
             .onChange(of: middleClickEnabled) { _, newValue in
@@ -171,12 +171,12 @@ struct SettingsView: View {
 
     private var cornerTriggerSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-            SectionHeader(title: "Corner Triggers")
+            SectionHeader(title: "Force Corner Triggers")
 
             SettingsToggleRow(
                 icon: "rectangle.dashed.badge.record",
                 iconColor: cornerTriggerEnabled ? DesignTokens.Colors.accentPrimary : DesignTokens.Colors.textSecondary,
-                title: "Enable Corner Triggers",
+                title: "Enable Force Corner Triggers",
                 isOn: $cornerTriggerEnabled
             )
             .onChange(of: cornerTriggerEnabled) { _, newValue in

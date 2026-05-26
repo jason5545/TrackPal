@@ -181,42 +181,42 @@
         }
       }
     },
-    "Middle Click" : {
+    "Force Middle Click" : {
       "localizations" : {
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "中鍵點擊"
+            "value" : "用力按壓中鍵"
           }
         }
       }
     },
-    "Enable Middle Click" : {
+    "Enable Force Middle Click" : {
       "localizations" : {
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "啟用中鍵點擊"
+            "value" : "啟用用力按壓中鍵"
           }
         }
       }
     },
-    "Corner Triggers" : {
+    "Force Corner Triggers" : {
       "localizations" : {
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "角落觸發"
+            "value" : "用力按壓角落"
           }
         }
       }
     },
-    "Enable Corner Triggers" : {
+    "Enable Force Corner Triggers" : {
       "localizations" : {
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "啟用角落觸發"
+            "value" : "啟用用力按壓角落"
           }
         }
       }
@@ -291,22 +291,22 @@
         }
       }
     },
-    "Middle" : {
+    "Force Middle" : {
       "localizations" : {
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "中鍵"
+            "value" : "用力中鍵"
           }
         }
       }
     },
-    "Corner" : {
+    "Force Corner" : {
       "localizations" : {
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "角落"
+            "value" : "用力角落"
           }
         }
       }

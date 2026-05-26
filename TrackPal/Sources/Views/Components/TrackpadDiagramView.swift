@@ -216,7 +216,7 @@ struct TrackpadLegendView: View {
                         .fill(DesignTokens.Colors.middleClickZone)
                         .frame(width: 12, height: 12)
                         .cornerRadius(2)
-                    Text("Middle")
+                    Text("Force Middle")
                         .font(DesignTokens.Typography.caption)
                         .foregroundStyle(DesignTokens.Colors.textSecondary)
                 }
@@ -228,7 +228,7 @@ struct TrackpadLegendView: View {
                         .fill(DesignTokens.Colors.cornerTriggerZone)
                         .frame(width: 12, height: 12)
                         .cornerRadius(2)
-                    Text("Corner")
+                    Text("Force Corner")
                         .font(DesignTokens.Typography.caption)
                         .foregroundStyle(DesignTokens.Colors.textSecondary)
                 }
