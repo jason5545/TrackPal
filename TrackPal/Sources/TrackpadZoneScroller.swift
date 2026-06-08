@@ -197,12 +197,16 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private var touchStartTime: Double = 0
     private var touchStartPosition: CGPoint = .zero
     private let tapMaxDuration: Double = 0.3      // 300ms
-    private let tapMaxMovement: CGFloat = 0.05    // 5% of trackpad
+    private let tapMaxMovement: CGFloat = ForcePressActionGate.defaultMaxMovementBeforeForce
     private let forcePressMaxDuration: Double = 1.0
     private var forcePressSatisfied: Bool = false
     private var forcePressMaxForce: Float = 0
     private var forcePressSource: String = "none"
-    private let forcePressThreshold: Float = 100.0
+    private var forceActionTriggered: Bool = false
+    private var forcePressThresholdRejected: Bool = false
+    private let forcePressActionGate = ForcePressActionGate()
+    private let cornerForcePressThreshold: Float = 100.0
+    private let middleClickForcePressThreshold: Float = 70.0
 
     // MARK: - Legacy Adaptive Tuning State
 
@@ -456,6 +460,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 forcePressSatisfied = false
                 forcePressMaxForce = 0
                 forcePressSource = "none"
+                forceActionTriggered = false
+                forcePressThresholdRejected = false
                 let preliminaryZone = determineZone(position)
                 currentZone = preliminaryZone
 
@@ -669,6 +675,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         forcePressSatisfied = false
         forcePressMaxForce = 0
         forcePressSource = "none"
+        forceActionTriggered = false
+        forcePressThresholdRejected = false
         isActivelyScrollingInZone = false
     }
 
@@ -1130,7 +1138,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         if currentZone == .middleClick && middleClickEnabled {
             guard determineZone(forcePosition) == .middleClick else { return }
             forcePressMaxForce = max(forcePressMaxForce, force)
-            if force >= forcePressThreshold {
+            if force >= middleClickForcePressThreshold {
                 markForcePressSatisfied(source: "force", position: forcePosition)
             }
             return
@@ -1140,17 +1148,40 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         guard isPosition(forcePosition, inCornerZone: currentZone) else { return }
 
         forcePressMaxForce = max(forcePressMaxForce, force)
-        if force >= forcePressThreshold {
+        if force >= cornerForcePressThreshold {
             markForcePressSatisfied(source: "force", position: forcePosition)
         }
     }
 
     private func markForcePressSatisfied(source: String, position: CGPoint) {
-        let wasSatisfied = forcePressSatisfied
+        guard !forcePressSatisfied else { return }
+
+        let decision = forcePressActionGate.evaluateAtForceThreshold(
+            touchStartPosition: touchStartPosition,
+            forcePosition: position
+        )
+
+        if case let .reject(reason, movementBeforeForce) = decision {
+            if !forcePressThresholdRejected {
+                forcePressThresholdRejected = true
+                LogManager.shared.log(String(format: "Force action rejected: %@ movementBeforeForce=%.4f max=%.4f",
+                                             reason.rawValue, movementBeforeForce, tapMaxMovement))
+            }
+            return
+        }
+
         forcePressSatisfied = true
         forcePressSource = source
 
-        guard !wasSatisfied, isCornerZone(currentZone) else { return }
+        if currentZone == .middleClick && middleClickEnabled {
+            forceActionTriggered = true
+            LogManager.shared.log(String(format: "Middle click press accepted: source=%@ maxForce=%.1f",
+                                         source, forcePressMaxForce))
+            postMiddleClickEvent()
+            return
+        }
+
+        guard isCornerZone(currentZone) else { return }
 
         isScrollActivationPending = false
         activationDeltas.removeAll()
@@ -1159,6 +1190,14 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
         LogManager.shared.log(String(format: "Corner force press accepted: zone=%@ source=%@ maxForce=%.1f",
                                      String(describing: currentZone), source, forcePressMaxForce))
+
+        let action = cornerActions[currentZone] ?? .none
+        guard action != .none else { return }
+
+        forceActionTriggered = true
+        LogManager.shared.log(String(format: "Corner action accepted: zone=%@ source=%@ maxForce=%.1f",
+                                     String(describing: currentZone), forcePressSource, forcePressMaxForce))
+        executeCornerAction(action)
     }
 
     private func isPosition(_ position: CGPoint, inCornerZone zone: ScrollZone) -> Bool {
@@ -1421,6 +1460,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     // MARK: - Middle Click
 
     private func handleMiddleClickTap(endPosition: CGPoint, endTime: Double) {
+        guard !forceActionTriggered else { return }
+
         let duration = endTime - touchStartTime
         let movement = hypot(
             endPosition.x - touchStartPosition.x,
@@ -1428,10 +1469,14 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         )
 
         guard movement < tapMaxMovement else {
+            LogManager.shared.log(String(format: "Middle click ignored: moved too far (movement=%.4f max=%.4f)",
+                                         movement, tapMaxMovement))
             return
         }
 
         guard duration < forcePressMaxDuration else {
+            LogManager.shared.log(String(format: "Middle click ignored: held too long without force (duration=%.3fs max=%.3fs maxForce=%.1f)",
+                                         duration, forcePressMaxDuration, forcePressMaxForce))
             return
         }
 
@@ -1484,6 +1529,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     }
 
     private func handleCornerTap(zone: ScrollZone, endPosition: CGPoint, endTime: Double) {
+        guard !forceActionTriggered else { return }
+
         let duration = endTime - touchStartTime
         let movement = hypot(
             endPosition.x - touchStartPosition.x,
@@ -1492,6 +1539,9 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
         // Check if it's a valid force tap (short-ish duration, minimal movement)
         guard duration < forcePressMaxDuration && movement < tapMaxMovement else {
+            LogManager.shared.log(String(format: "Corner action ignored: release guard failed (zone=%@ duration=%.3fs movement=%.4f maxDuration=%.3fs maxMovement=%.4f maxForce=%.1f)",
+                                         String(describing: zone), duration, movement,
+                                         forcePressMaxDuration, tapMaxMovement, forcePressMaxForce))
             return
         }
 

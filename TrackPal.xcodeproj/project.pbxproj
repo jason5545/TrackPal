@@ -10,6 +10,9 @@
 		A1000003232F0003 /* InertiaScroller.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000013232F0003 /* InertiaScroller.swift */; };
 		A1000006232F0006 /* LogManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000016232F0006 /* LogManager.swift */; };
 		A1000008232F0008 /* TrackpadZoneScroller.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000018232F0008 /* TrackpadZoneScroller.swift */; };
+		A2000001232F0101 /* ForcePressActionGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000011232F0111 /* ForcePressActionGate.swift */; };
+		A2000002232F0102 /* ForcePressActionGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000011232F0111 /* ForcePressActionGate.swift */; };
+		A2000003232F0103 /* ForcePressActionGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000012232F0112 /* ForcePressActionGateTests.swift */; };
 		A10000B0232F00B0 /* TrackPalApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A0232F00A0 /* TrackPalApp.swift */; };
 		A10000B1232F00B1 /* MenuBarPopupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A1232F00A1 /* MenuBarPopupView.swift */; };
 		A10000B2232F00B2 /* DesignTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A2232F00A2 /* DesignTokens.swift */; };
@@ -35,6 +38,7 @@
 		A1000021232F0010 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A1000022232F0011 /* TrackPal.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TrackPal.entitlements; sourceTree = "<group>"; };
 		A1000030232F0020 /* TrackPal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TrackPal.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A2000030232F0120 /* TrackPalTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TrackPalTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000A0232F00A0 /* TrackPalApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackPalApp.swift; sourceTree = "<group>"; };
 		A10000A1232F00A1 /* MenuBarPopupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarPopupView.swift; sourceTree = "<group>"; };
 		A10000A2232F00A2 /* DesignTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignTokens.swift; sourceTree = "<group>"; };
@@ -49,10 +53,19 @@
 		A10000D1232F00D1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A10000AB232F00AB /* LocalizedNameProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalizedNameProvider.swift; sourceTree = "<group>"; };
 		A10000AC232F00AC /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
+		A2000011232F0111 /* ForcePressActionGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForcePressActionGate.swift; sourceTree = "<group>"; };
+		A2000012232F0112 /* ForcePressActionGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForcePressActionGateTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		A1000040232F0030 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A2000040232F0130 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -66,6 +79,7 @@
 			isa = PBXGroup;
 			children = (
 				A1000051232F0041 /* TrackPal */,
+				A2000050232F0140 /* TrackPalTests */,
 				A1000052232F0042 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -83,6 +97,7 @@
 			isa = PBXGroup;
 			children = (
 				A1000030232F0020 /* TrackPal.app */,
+				A2000030232F0120 /* TrackPalTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -93,6 +108,7 @@
 				A10000A0232F00A0 /* TrackPalApp.swift */,
 				A1000013232F0003 /* InertiaScroller.swift */,
 				A1000016232F0006 /* LogManager.swift */,
+				A2000011232F0111 /* ForcePressActionGate.swift */,
 				A1000018232F0008 /* TrackpadZoneScroller.swift */,
 				A10000AB232F00AB /* LocalizedNameProvider.swift */,
 				A10000AC232F00AC /* Localizable.xcstrings */,
@@ -154,6 +170,14 @@
 			path = Settings;
 			sourceTree = "<group>";
 		};
+		A2000050232F0140 /* TrackPalTests */ = {
+			isa = PBXGroup;
+			children = (
+				A2000012232F0112 /* ForcePressActionGateTests.swift */,
+			);
+			path = TrackPalTests;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -174,6 +198,22 @@
 			productReference = A1000030232F0020 /* TrackPal.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A2000060232F0150 /* TrackPalTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A2000070232F0160 /* Build configuration list for PBXNativeTarget "TrackPalTests" */;
+			buildPhases = (
+				A2000061232F0151 /* Sources */,
+				A2000040232F0130 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = TrackPalTests;
+			productName = TrackPalTests;
+			productReference = A2000030232F0120 /* TrackPalTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -185,6 +225,9 @@
 				LastUpgradeCheck = 1500;
 				TargetAttributes = {
 					A1000060232F0050 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+					A2000060232F0150 = {
 						CreatedOnToolsVersion = 15.0;
 					};
 				};
@@ -204,6 +247,7 @@
 			projectRoot = "";
 			targets = (
 				A1000060232F0050 /* TrackPal */,
+				A2000060232F0150 /* TrackPalTests */,
 			);
 		};
 /* End PBXProject section */
@@ -228,6 +272,7 @@
 				A10000B0232F00B0 /* TrackPalApp.swift in Sources */,
 				A1000003232F0003 /* InertiaScroller.swift in Sources */,
 				A1000006232F0006 /* LogManager.swift in Sources */,
+				A2000001232F0101 /* ForcePressActionGate.swift in Sources */,
 				A1000008232F0008 /* TrackpadZoneScroller.swift in Sources */,
 				A10000B1232F00B1 /* MenuBarPopupView.swift in Sources */,
 				A10000B2232F00B2 /* DesignTokens.swift in Sources */,
@@ -240,6 +285,15 @@
 				A10000B9232F00B9 /* SettingsPickerRow.swift in Sources */,
 				A10000BA232F00BA /* SettingsView.swift in Sources */,
 				A10000BB232F00BB /* LocalizedNameProvider.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A2000061232F0151 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A2000002232F0102 /* ForcePressActionGate.swift in Sources */,
+				A2000003232F0103 /* ForcePressActionGateTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -428,6 +482,46 @@
 			};
 			name = Release;
 		};
+		A2000092232F0182 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = MW4GWYGX56;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@loader_path/../Frameworks",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.jasonchien.TrackPalTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				WRAPPER_EXTENSION = xctest;
+			};
+			name = Debug;
+		};
+		A2000093232F0183 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = MW4GWYGX56;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@loader_path/../Frameworks",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.jasonchien.TrackPalTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				WRAPPER_EXTENSION = xctest;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -445,6 +539,15 @@
 			buildConfigurations = (
 				A1000090232F0080 /* Debug */,
 				A1000091232F0081 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A2000070232F0160 /* Build configuration list for PBXNativeTarget "TrackPalTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A2000092232F0182 /* Debug */,
+				A2000093232F0183 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
