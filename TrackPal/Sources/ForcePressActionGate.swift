@@ -10,15 +10,24 @@ struct ForcePressActionGate {
     }
 
     enum Decision: Equatable {
-        case trigger(movementBeforeForce: CGFloat)
+        case trigger(source: TriggerSource, movementBeforeForce: CGFloat)
         case reject(reason: RejectionReason, movementBeforeForce: CGFloat)
     }
 
+    enum TriggerSource: String {
+        case standard = "force"
+        case assisted = "force-assisted"
+    }
+
     enum RejectionReason: String {
+        case belowAssistedForce
         case movedTooFarBeforeForce
     }
 
-    func evaluateAtForceThreshold(
+    func evaluateForce(
+        force: Float,
+        standardThreshold: Float,
+        assistedThreshold: Float,
         touchStartPosition: CGPoint,
         forcePosition: CGPoint
     ) -> Decision {
@@ -34,6 +43,17 @@ struct ForcePressActionGate {
             )
         }
 
-        return .trigger(movementBeforeForce: movementBeforeForce)
+        if force >= standardThreshold {
+            return .trigger(source: .standard, movementBeforeForce: movementBeforeForce)
+        }
+
+        guard force >= assistedThreshold else {
+            return .reject(
+                reason: .belowAssistedForce,
+                movementBeforeForce: movementBeforeForce
+            )
+        }
+
+        return .trigger(source: .assisted, movementBeforeForce: movementBeforeForce)
     }
 }

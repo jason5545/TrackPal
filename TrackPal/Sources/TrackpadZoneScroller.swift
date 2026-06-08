@@ -206,6 +206,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private var forcePressThresholdRejected: Bool = false
     private let forcePressActionGate = ForcePressActionGate()
     private let cornerForcePressThreshold: Float = 100.0
+    private let cornerForceAssistedThreshold: Float = 70.0
     private let middleClickForcePressThreshold: Float = 70.0
 
     // MARK: - Legacy Adaptive Tuning State
@@ -1139,7 +1140,12 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             guard determineZone(forcePosition) == .middleClick else { return }
             forcePressMaxForce = max(forcePressMaxForce, force)
             if force >= middleClickForcePressThreshold {
-                markForcePressSatisfied(source: "force", position: forcePosition)
+                markForcePressSatisfied(
+                    force: force,
+                    standardThreshold: middleClickForcePressThreshold,
+                    assistedThreshold: middleClickForcePressThreshold,
+                    position: forcePosition
+                )
             }
             return
         }
@@ -1148,20 +1154,33 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         guard isPosition(forcePosition, inCornerZone: currentZone) else { return }
 
         forcePressMaxForce = max(forcePressMaxForce, force)
-        if force >= cornerForcePressThreshold {
-            markForcePressSatisfied(source: "force", position: forcePosition)
+        if force >= cornerForceAssistedThreshold {
+            markForcePressSatisfied(
+                force: force,
+                standardThreshold: cornerForcePressThreshold,
+                assistedThreshold: cornerForceAssistedThreshold,
+                position: forcePosition
+            )
         }
     }
 
-    private func markForcePressSatisfied(source: String, position: CGPoint) {
+    private func markForcePressSatisfied(
+        force: Float,
+        standardThreshold: Float,
+        assistedThreshold: Float,
+        position: CGPoint
+    ) {
         guard !forcePressSatisfied else { return }
 
-        let decision = forcePressActionGate.evaluateAtForceThreshold(
+        let decision = forcePressActionGate.evaluateForce(
+            force: force,
+            standardThreshold: standardThreshold,
+            assistedThreshold: assistedThreshold,
             touchStartPosition: touchStartPosition,
             forcePosition: position
         )
 
-        if case let .reject(reason, movementBeforeForce) = decision {
+        if case let .reject(reason: reason, movementBeforeForce: movementBeforeForce) = decision {
             if !forcePressThresholdRejected {
                 forcePressThresholdRejected = true
                 LogManager.shared.log(String(format: "Force action rejected: %@ movementBeforeForce=%.4f max=%.4f",
@@ -1171,12 +1190,14 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         }
 
         forcePressSatisfied = true
-        forcePressSource = source
+        guard case let .trigger(source: triggerSource, movementBeforeForce: _) = decision else { return }
+        forcePressSource = triggerSource.rawValue
 
         if currentZone == .middleClick && middleClickEnabled {
             forceActionTriggered = true
             LogManager.shared.log(String(format: "Middle click press accepted: source=%@ maxForce=%.1f",
-                                         source, forcePressMaxForce))
+                                         forcePressSource, forcePressMaxForce))
+            ScrollEventInterceptor.shared.suppressPrimaryClickForForceAction()
             postMiddleClickEvent()
             return
         }
@@ -1189,7 +1210,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         isActivelyScrollingInZone = false
 
         LogManager.shared.log(String(format: "Corner force press accepted: zone=%@ source=%@ maxForce=%.1f",
-                                     String(describing: currentZone), source, forcePressMaxForce))
+                                     String(describing: currentZone), forcePressSource, forcePressMaxForce))
 
         let action = cornerActions[currentZone] ?? .none
         guard action != .none else { return }
@@ -1197,6 +1218,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         forceActionTriggered = true
         LogManager.shared.log(String(format: "Corner action accepted: zone=%@ source=%@ maxForce=%.1f",
                                      String(describing: currentZone), forcePressSource, forcePressMaxForce))
+        ScrollEventInterceptor.shared.suppressPrimaryClickForForceAction()
         executeCornerAction(action)
     }
 
@@ -1501,6 +1523,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             mouseCursorPosition: cgPoint,
             mouseButton: .center
         ) {
+            tagTrackPalMouseEvent(downEvent)
             downEvent.post(tap: .cghidEventTap)
         }
 
@@ -1511,6 +1534,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             mouseCursorPosition: cgPoint,
             mouseButton: .center
         ) {
+            tagTrackPalMouseEvent(upEvent)
             upEvent.post(tap: .cghidEventTap)
         }
 
@@ -1574,6 +1598,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             mouseCursorPosition: cgPoint,
             mouseButton: .right
         ) {
+            tagTrackPalMouseEvent(downEvent)
             downEvent.post(tap: .cghidEventTap)
         }
 
@@ -1583,6 +1608,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             mouseCursorPosition: cgPoint,
             mouseButton: .right
         ) {
+            tagTrackPalMouseEvent(upEvent)
             upEvent.post(tap: .cghidEventTap)
         }
     }
@@ -1638,6 +1664,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             mouseCursorPosition: clickPoint,
             mouseButton: .left
         ) {
+            tagTrackPalMouseEvent(downEvent)
             downEvent.post(tap: .cghidEventTap)
         }
 
@@ -1648,9 +1675,14 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             mouseCursorPosition: clickPoint,
             mouseButton: .left
         ) {
+            tagTrackPalMouseEvent(upEvent)
             upEvent.post(tap: .cghidEventTap)
         }
     }
+}
+
+private func tagTrackPalMouseEvent(_ event: CGEvent) {
+    event.setIntegerValueField(.eventSourceUserData, value: kTrackPalEventSignature)
 }
 
 // MARK: - C Callback with Refcon
@@ -1767,6 +1799,7 @@ final class ScrollEventInterceptor: @unchecked Sendable {
     fileprivate var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var isRunning: Bool = false
+    private var primaryClickGate = PrimaryClickSuppressionGate()
     private let lock = NSLock()
 
     private init() {}
@@ -1779,6 +1812,8 @@ final class ScrollEventInterceptor: @unchecked Sendable {
 
         let eventMask: CGEventMask = (1 << CGEventType.scrollWheel.rawValue)
             | (1 << CGEventType.mouseMoved.rawValue)
+            | (1 << CGEventType.leftMouseDown.rawValue)
+            | (1 << CGEventType.leftMouseUp.rawValue)
 
         // Create event tap at HID level (same as where we post events)
         eventTap = CGEvent.tapCreate(
@@ -1826,6 +1861,40 @@ final class ScrollEventInterceptor: @unchecked Sendable {
         LogManager.shared.log("Scroll event interceptor stopped")
     }
 
+    func suppressPrimaryClickForForceAction(duration: TimeInterval = 1.25) {
+        let now = DispatchTime.now().uptimeNanoseconds
+        let durationNanoseconds = UInt64(max(duration, 0) * 1_000_000_000)
+
+        lock.lock()
+        primaryClickGate.arm(now: now, durationNanoseconds: durationNanoseconds)
+        lock.unlock()
+
+        LogManager.shared.log("Primary click suppression armed after force action")
+    }
+
+    func shouldSuppressPrimaryClick(type: CGEventType, event: CGEvent) -> Bool {
+        guard let mouseEvent = primaryClickEvent(for: type) else {
+            return false
+        }
+
+        let userData = event.getIntegerValueField(.eventSourceUserData)
+        if userData == kTrackPalEventSignature {
+            return false
+        }
+
+        let now = DispatchTime.now().uptimeNanoseconds
+
+        lock.lock()
+        let shouldSuppress = primaryClickGate.shouldSuppress(event: mouseEvent, now: now)
+        lock.unlock()
+
+        if shouldSuppress {
+            LogManager.shared.log("Native left click suppressed after force action")
+        }
+
+        return shouldSuppress
+    }
+
     /// Check if an event should be suppressed
     func shouldSuppressEvent(_ event: CGEvent) -> Bool {
         // Don't suppress if we're not actively scrolling in a zone
@@ -1841,6 +1910,17 @@ final class ScrollEventInterceptor: @unchecked Sendable {
 
         // Suppress other scroll events while we're actively scrolling
         return true
+    }
+}
+
+private func primaryClickEvent(for type: CGEventType) -> PrimaryClickSuppressionGate.MouseEvent? {
+    switch type {
+    case .leftMouseDown:
+        return .leftMouseDown
+    case .leftMouseUp:
+        return .leftMouseUp
+    default:
+        return nil
     }
 }
 
@@ -1866,6 +1946,13 @@ private func scrollInterceptorCallback(
     // Suppress cursor movement during active zone scrolling
     if type == .mouseMoved {
         if TrackpadZoneScroller.shared.isActivelyScrollingInZone {
+            return nil
+        }
+        return Unmanaged.passUnretained(event)
+    }
+
+    if type == .leftMouseDown || type == .leftMouseUp {
+        if ScrollEventInterceptor.shared.shouldSuppressPrimaryClick(type: type, event: event) {
             return nil
         }
         return Unmanaged.passUnretained(event)

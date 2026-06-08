@@ -13,6 +13,9 @@
 		A2000001232F0101 /* ForcePressActionGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000011232F0111 /* ForcePressActionGate.swift */; };
 		A2000002232F0102 /* ForcePressActionGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000011232F0111 /* ForcePressActionGate.swift */; };
 		A2000003232F0103 /* ForcePressActionGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000012232F0112 /* ForcePressActionGateTests.swift */; };
+		A2000004232F0104 /* PrimaryClickSuppressionGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000013232F0113 /* PrimaryClickSuppressionGate.swift */; };
+		A2000005232F0105 /* PrimaryClickSuppressionGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000013232F0113 /* PrimaryClickSuppressionGate.swift */; };
+		A2000006232F0106 /* PrimaryClickSuppressionGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000014232F0114 /* PrimaryClickSuppressionGateTests.swift */; };
 		A10000B0232F00B0 /* TrackPalApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A0232F00A0 /* TrackPalApp.swift */; };
 		A10000B1232F00B1 /* MenuBarPopupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A1232F00A1 /* MenuBarPopupView.swift */; };
 		A10000B2232F00B2 /* DesignTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A2232F00A2 /* DesignTokens.swift */; };
@@ -55,6 +58,8 @@
 		A10000AC232F00AC /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		A2000011232F0111 /* ForcePressActionGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForcePressActionGate.swift; sourceTree = "<group>"; };
 		A2000012232F0112 /* ForcePressActionGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForcePressActionGateTests.swift; sourceTree = "<group>"; };
+		A2000013232F0113 /* PrimaryClickSuppressionGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrimaryClickSuppressionGate.swift; sourceTree = "<group>"; };
+		A2000014232F0114 /* PrimaryClickSuppressionGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrimaryClickSuppressionGateTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -109,6 +114,7 @@
 				A1000013232F0003 /* InertiaScroller.swift */,
 				A1000016232F0006 /* LogManager.swift */,
 				A2000011232F0111 /* ForcePressActionGate.swift */,
+				A2000013232F0113 /* PrimaryClickSuppressionGate.swift */,
 				A1000018232F0008 /* TrackpadZoneScroller.swift */,
 				A10000AB232F00AB /* LocalizedNameProvider.swift */,
 				A10000AC232F00AC /* Localizable.xcstrings */,
@@ -174,6 +180,7 @@
 			isa = PBXGroup;
 			children = (
 				A2000012232F0112 /* ForcePressActionGateTests.swift */,
+				A2000014232F0114 /* PrimaryClickSuppressionGateTests.swift */,
 			);
 			path = TrackPalTests;
 			sourceTree = "<group>";
@@ -273,6 +280,7 @@
 				A1000003232F0003 /* InertiaScroller.swift in Sources */,
 				A1000006232F0006 /* LogManager.swift in Sources */,
 				A2000001232F0101 /* ForcePressActionGate.swift in Sources */,
+				A2000004232F0104 /* PrimaryClickSuppressionGate.swift in Sources */,
 				A1000008232F0008 /* TrackpadZoneScroller.swift in Sources */,
 				A10000B1232F00B1 /* MenuBarPopupView.swift in Sources */,
 				A10000B2232F00B2 /* DesignTokens.swift in Sources */,
@@ -293,7 +301,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				A2000002232F0102 /* ForcePressActionGate.swift in Sources */,
+				A2000005232F0105 /* PrimaryClickSuppressionGate.swift in Sources */,
 				A2000003232F0103 /* ForcePressActionGateTests.swift in Sources */,
+				A2000006232F0106 /* PrimaryClickSuppressionGateTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
