@@ -7,7 +7,7 @@ final class CornerActivationZoneTests: XCTestCase {
 
         XCTAssertEqual(
             zone.corner(
-                at: CGPoint(x: 0.10, y: 0.60),
+                at: CGPoint(x: 0.10, y: 0.78),
                 includeExpandedTopLeft: true
             ),
             .topLeft
@@ -19,18 +19,29 @@ final class CornerActivationZoneTests: XCTestCase {
 
         XCTAssertNil(
             zone.corner(
-                at: CGPoint(x: 0.10, y: 0.49),
+                at: CGPoint(x: 0.10, y: 0.74),
                 includeExpandedTopLeft: true
             )
         )
     }
 
-    func testTopLeftActionZoneIncludesHalfwayBoundary() {
+    func testTopLeftActionZoneRejectsLeftMiddleArea() {
+        let zone = CornerActivationZone(edgeSize: 0.15)
+
+        XCTAssertNil(
+            zone.corner(
+                at: CGPoint(x: 0.05, y: 0.59),
+                includeExpandedTopLeft: true
+            )
+        )
+    }
+
+    func testTopLeftActionZoneIncludesHighBoundary() {
         let zone = CornerActivationZone(edgeSize: 0.15)
 
         XCTAssertEqual(
             zone.corner(
-                at: CGPoint(x: 0.03, y: 0.50),
+                at: CGPoint(x: 0.03, y: 0.75),
                 includeExpandedTopLeft: true
             ),
             .topLeft
@@ -71,7 +82,7 @@ final class CornerActivationZoneTests: XCTestCase {
 
         XCTAssertNil(
             zone.corner(
-                at: CGPoint(x: 0.10, y: 0.60),
+                at: CGPoint(x: 0.10, y: 0.78),
                 includeExpandedTopLeft: false
             )
         )
