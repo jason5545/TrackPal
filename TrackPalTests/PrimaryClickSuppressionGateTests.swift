@@ -33,4 +33,17 @@ final class PrimaryClickSuppressionGateTests: XCTestCase {
         XCTAssertTrue(gate.shouldSuppress(event: .leftMouseUp, now: 1_120))
         XCTAssertFalse(gate.shouldSuppress(event: .leftMouseDown, now: 1_130))
     }
+
+    func testOldSequenceUpDoesNotClearNewArm() {
+        var gate = PrimaryClickSuppressionGate()
+        gate.arm(now: 1_000, durationNanoseconds: 500)
+
+        XCTAssertTrue(gate.shouldSuppress(event: .leftMouseDown, now: 1_100))
+
+        gate.arm(now: 1_150, durationNanoseconds: 500)
+
+        XCTAssertTrue(gate.shouldSuppress(event: .leftMouseUp, now: 1_160))
+        XCTAssertTrue(gate.shouldSuppress(event: .leftMouseDown, now: 1_200))
+        XCTAssertTrue(gate.shouldSuppress(event: .leftMouseUp, now: 1_220))
+    }
 }

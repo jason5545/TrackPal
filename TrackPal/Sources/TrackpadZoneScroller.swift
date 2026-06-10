@@ -465,6 +465,9 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 forcePressThresholdRejected = false
                 let preliminaryZone = determineZone(position)
                 currentZone = preliminaryZone
+                if shouldPreemptNativePrimaryClick(for: preliminaryZone) {
+                    ScrollEventInterceptor.shared.suppressPrimaryClickForPendingForceAction()
+                }
 
                 if isScrollZone(preliminaryZone) {
                     // Cancel any running inertia from a previous scroll direction
@@ -1222,6 +1225,18 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         executeCornerAction(action)
     }
 
+    private func shouldPreemptNativePrimaryClick(for zone: ScrollZone) -> Bool {
+        if zone == .middleClick {
+            return middleClickEnabled
+        }
+
+        if isCornerZone(zone) {
+            return (cornerActions[zone] ?? .none) != .none
+        }
+
+        return false
+    }
+
     private func isPosition(_ position: CGPoint, inCornerZone zone: ScrollZone) -> Bool {
         let isLeft = position.x < cornerTriggerZoneSize
         let isRight = position.x > (1.0 - cornerTriggerZoneSize)
@@ -1861,15 +1876,23 @@ final class ScrollEventInterceptor: @unchecked Sendable {
         LogManager.shared.log("Scroll event interceptor stopped")
     }
 
+    func suppressPrimaryClickForPendingForceAction(duration: TimeInterval = 2.0) {
+        armPrimaryClickSuppression(duration: duration)
+        LogManager.shared.log("Primary click suppression armed for pending force action")
+    }
+
     func suppressPrimaryClickForForceAction(duration: TimeInterval = 1.25) {
+        armPrimaryClickSuppression(duration: duration)
+        LogManager.shared.log("Primary click suppression armed after force action")
+    }
+
+    private func armPrimaryClickSuppression(duration: TimeInterval) {
         let now = DispatchTime.now().uptimeNanoseconds
         let durationNanoseconds = UInt64(max(duration, 0) * 1_000_000_000)
 
         lock.lock()
         primaryClickGate.arm(now: now, durationNanoseconds: durationNanoseconds)
         lock.unlock()
-
-        LogManager.shared.log("Primary click suppression armed after force action")
     }
 
     func shouldSuppressPrimaryClick(type: CGEventType, event: CGEvent) -> Bool {
@@ -1889,7 +1912,7 @@ final class ScrollEventInterceptor: @unchecked Sendable {
         lock.unlock()
 
         if shouldSuppress {
-            LogManager.shared.log("Native left click suppressed after force action")
+            LogManager.shared.log("Native left click suppressed during force action guard")
         }
 
         return shouldSuppress

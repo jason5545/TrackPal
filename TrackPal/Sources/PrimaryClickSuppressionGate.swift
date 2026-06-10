@@ -6,8 +6,11 @@ struct PrimaryClickSuppressionGate {
 
     private var suppressUntil: UInt64 = 0
     private var isSuppressingSequence = false
+    private var generation: UInt64 = 0
+    private var suppressingSequenceGeneration: UInt64 = 0
 
     mutating func arm(now: UInt64, durationNanoseconds: UInt64) {
+        generation &+= 1
         suppressUntil = max(suppressUntil, now + durationNanoseconds)
     }
 
@@ -21,12 +24,17 @@ struct PrimaryClickSuppressionGate {
             }
 
             isSuppressingSequence = true
+            suppressingSequenceGeneration = generation
             return true
 
         case .leftMouseUp:
             if isSuppressingSequence {
+                let sequenceGeneration = suppressingSequenceGeneration
                 isSuppressingSequence = false
-                suppressUntil = 0
+                suppressingSequenceGeneration = 0
+                if sequenceGeneration == generation {
+                    suppressUntil = 0
+                }
                 return true
             }
 
@@ -34,7 +42,6 @@ struct PrimaryClickSuppressionGate {
                 return false
             }
 
-            suppressUntil = 0
             return true
         }
     }
