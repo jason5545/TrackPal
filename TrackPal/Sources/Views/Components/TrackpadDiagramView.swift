@@ -47,6 +47,7 @@ struct TrackpadDiagramView: View {
             let middleClickWidth = width * middleClickZoneWidth
             let middleClickHeight = height * middleClickZoneHeight
             let cornerSize = min(width, height) * cornerTriggerZoneSize
+            let expandedTopLeftHeight = height * (1.0 - CornerActivationZone.defaultTopLeftMinimumY)
 
             ZStack {
                 // Trackpad outline
@@ -98,7 +99,7 @@ struct TrackpadDiagramView: View {
                     // Top-left corner
                     Rectangle()
                         .fill(DesignTokens.Colors.cornerTriggerZone)
-                        .frame(width: cornerSize, height: cornerSize)
+                        .frame(width: cornerSize, height: expandedTopLeftHeight)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         .padding(2)
 

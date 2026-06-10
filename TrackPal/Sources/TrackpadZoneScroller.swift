@@ -1238,23 +1238,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     }
 
     private func isPosition(_ position: CGPoint, inCornerZone zone: ScrollZone) -> Bool {
-        let isLeft = position.x < cornerTriggerZoneSize
-        let isRight = position.x > (1.0 - cornerTriggerZoneSize)
-        let isTop = position.y > (1.0 - cornerTriggerZoneSize)
-        let isBottom = position.y < cornerTriggerZoneSize
-
-        switch zone {
-        case .topLeftCorner:
-            return isTop && isLeft
-        case .topRightCorner:
-            return isTop && isRight
-        case .bottomLeftCorner:
-            return isBottom && isLeft
-        case .bottomRightCorner:
-            return isBottom && isRight
-        default:
-            return false
-        }
+        guard let corner = cornerActivationCorner(for: zone) else { return false }
+        return CornerActivationZone(edgeSize: cornerTriggerZoneSize).contains(position, corner: corner)
     }
 
     private func determineZone(_ position: CGPoint) -> ScrollZone {
@@ -1264,29 +1249,14 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
         // Check corners first (highest priority)
         if cornerTriggerEnabled {
-            let isLeft = position.x < cornerTriggerZoneSize
-            let isRight = position.x > (1.0 - cornerTriggerZoneSize)
-            let isTop = position.y > (1.0 - cornerTriggerZoneSize)
-            let isBottom = position.y < cornerTriggerZoneSize
-
-            let cornerZone: ScrollZone?
-            if isTop && isLeft {
-                cornerZone = .topLeftCorner
-            } else if isTop && isRight {
-                cornerZone = .topRightCorner
-            } else if isBottom && isLeft {
-                cornerZone = .bottomLeftCorner
-            } else if isBottom && isRight {
-                cornerZone = .bottomRightCorner
-            } else {
-                cornerZone = nil
-            }
-
-            if let zone = cornerZone {
+            if let zone = cornerZone(at: position, includeExpandedTopLeft: true) {
                 let action = cornerActions[zone] ?? .none
                 if action != .none {
                     return zone
                 }
+            }
+
+            if cornerZone(at: position, includeExpandedTopLeft: false) != nil {
                 // Unassigned corners preserve native behavior.
                 return .center
             }
@@ -1354,6 +1324,54 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         }
 
         return .center
+    }
+
+    private func cornerZone(
+        at position: CGPoint,
+        includeExpandedTopLeft: Bool
+    ) -> ScrollZone? {
+        let activationZone = CornerActivationZone(edgeSize: cornerTriggerZoneSize)
+
+        guard let corner = activationZone.corner(
+            at: position,
+            includeExpandedTopLeft: includeExpandedTopLeft
+        ) else {
+            return nil
+        }
+
+        return scrollZone(for: corner)
+    }
+
+    private func cornerActivationCorner(
+        for zone: ScrollZone
+    ) -> CornerActivationZone.Corner? {
+        switch zone {
+        case .topLeftCorner:
+            return .topLeft
+        case .topRightCorner:
+            return .topRight
+        case .bottomLeftCorner:
+            return .bottomLeft
+        case .bottomRightCorner:
+            return .bottomRight
+        default:
+            return nil
+        }
+    }
+
+    private func scrollZone(
+        for corner: CornerActivationZone.Corner
+    ) -> ScrollZone {
+        switch corner {
+        case .topLeft:
+            return .topLeftCorner
+        case .topRight:
+            return .topRightCorner
+        case .bottomLeft:
+            return .bottomLeftCorner
+        case .bottomRight:
+            return .bottomRightCorner
+        }
     }
 
     private func applyAccelerationCurve(_ delta: CGPoint) -> CGPoint {
