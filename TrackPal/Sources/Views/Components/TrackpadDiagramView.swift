@@ -47,7 +47,7 @@ struct TrackpadDiagramView: View {
             let middleClickWidth = width * middleClickZoneWidth
             let middleClickHeight = height * middleClickZoneHeight
             let cornerSize = min(width, height) * cornerTriggerZoneSize
-            let expandedTopLeftHeight = height * (1.0 - CornerActivationZone.defaultTopLeftMinimumY)
+            let expandedCornerDepth = height * (1.0 - CornerActivationZone.defaultFarEdgeBoundary)
 
             ZStack {
                 // Trackpad outline
@@ -99,28 +99,28 @@ struct TrackpadDiagramView: View {
                     // Top-left corner
                     Rectangle()
                         .fill(DesignTokens.Colors.cornerTriggerZone)
-                        .frame(width: cornerSize, height: expandedTopLeftHeight)
+                        .frame(width: cornerSize, height: expandedCornerDepth)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         .padding(2)
 
                     // Top-right corner
                     Rectangle()
                         .fill(DesignTokens.Colors.cornerTriggerZone)
-                        .frame(width: cornerSize, height: cornerSize)
+                        .frame(width: cornerSize, height: expandedCornerDepth)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                         .padding(2)
 
                     // Bottom-left corner
                     Rectangle()
                         .fill(DesignTokens.Colors.cornerTriggerZone)
-                        .frame(width: cornerSize, height: cornerSize)
+                        .frame(width: cornerSize, height: expandedCornerDepth)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                         .padding(2)
 
                     // Bottom-right corner
                     Rectangle()
                         .fill(DesignTokens.Colors.cornerTriggerZone)
-                        .frame(width: cornerSize, height: cornerSize)
+                        .frame(width: cornerSize, height: expandedCornerDepth)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                         .padding(2)
                 }

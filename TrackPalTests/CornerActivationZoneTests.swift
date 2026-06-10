@@ -2,59 +2,157 @@ import CoreGraphics
 import XCTest
 
 final class CornerActivationZoneTests: XCTestCase {
-    func testTopLeftActionZoneAcceptsLeftHighArea() {
+    func testExpandedCornerZonesAcceptFarEdgeAreas() {
         let zone = CornerActivationZone(edgeSize: 0.15)
 
         XCTAssertEqual(
             zone.corner(
                 at: CGPoint(x: 0.10, y: 0.78),
-                includeExpandedTopLeft: true
+                includeExpandedCorners: true
             ),
             .topLeft
         )
+
+        XCTAssertEqual(
+            zone.corner(
+                at: CGPoint(x: 0.90, y: 0.78),
+                includeExpandedCorners: true
+            ),
+            .topRight
+        )
+
+        XCTAssertEqual(
+            zone.corner(
+                at: CGPoint(x: 0.10, y: 0.22),
+                includeExpandedCorners: true
+            ),
+            .bottomLeft
+        )
+
+        XCTAssertEqual(
+            zone.corner(
+                at: CGPoint(x: 0.90, y: 0.22),
+                includeExpandedCorners: true
+            ),
+            .bottomRight
+        )
     }
 
-    func testTopLeftActionZoneRejectsLeftLowArea() {
+    func testExpandedCornerZonesRejectNearMisses() {
         let zone = CornerActivationZone(edgeSize: 0.15)
 
         XCTAssertNil(
             zone.corner(
                 at: CGPoint(x: 0.10, y: 0.76),
-                includeExpandedTopLeft: true
+                includeExpandedCorners: true
+            )
+        )
+
+        XCTAssertNil(
+            zone.corner(
+                at: CGPoint(x: 0.90, y: 0.76),
+                includeExpandedCorners: true
+            )
+        )
+
+        XCTAssertNil(
+            zone.corner(
+                at: CGPoint(x: 0.10, y: 0.24),
+                includeExpandedCorners: true
+            )
+        )
+
+        XCTAssertNil(
+            zone.corner(
+                at: CGPoint(x: 0.90, y: 0.24),
+                includeExpandedCorners: true
             )
         )
     }
 
-    func testTopLeftActionZoneRejectsLeftMiddleArea() {
+    func testExpandedCornerZonesRejectMiddleSideAreas() {
         let zone = CornerActivationZone(edgeSize: 0.15)
 
         XCTAssertNil(
             zone.corner(
                 at: CGPoint(x: 0.05, y: 0.59),
-                includeExpandedTopLeft: true
+                includeExpandedCorners: true
+            )
+        )
+
+        XCTAssertNil(
+            zone.corner(
+                at: CGPoint(x: 0.95, y: 0.59),
+                includeExpandedCorners: true
             )
         )
     }
 
-    func testTopLeftActionZoneIncludesHighBoundary() {
+    func testExpandedCornerZonesIncludeBoundaries() {
         let zone = CornerActivationZone(edgeSize: 0.15)
+        let nearEdgeBoundary = 1.0 - CornerActivationZone.defaultFarEdgeBoundary
 
         XCTAssertEqual(
             zone.corner(
                 at: CGPoint(x: 0.03, y: 0.77),
-                includeExpandedTopLeft: true
+                includeExpandedCorners: true
             ),
             .topLeft
         )
+
+        XCTAssertEqual(
+            zone.corner(
+                at: CGPoint(x: 0.97, y: 0.77),
+                includeExpandedCorners: true
+            ),
+            .topRight
+        )
+
+        XCTAssertEqual(
+            zone.corner(
+                at: CGPoint(x: 0.03, y: nearEdgeBoundary),
+                includeExpandedCorners: true
+            ),
+            .bottomLeft
+        )
+
+        XCTAssertEqual(
+            zone.corner(
+                at: CGPoint(x: 0.97, y: nearEdgeBoundary),
+                includeExpandedCorners: true
+            ),
+            .bottomRight
+        )
     }
 
-    func testTopLeftActionZoneStillRespectsLeftBoundary() {
+    func testExpandedCornerZonesRespectSideBoundaries() {
         let zone = CornerActivationZone(edgeSize: 0.15)
 
         XCTAssertNil(
             zone.corner(
-                at: CGPoint(x: 0.16, y: 0.60),
-                includeExpandedTopLeft: true
+                at: CGPoint(x: 0.16, y: 0.78),
+                includeExpandedCorners: true
+            )
+        )
+
+        XCTAssertNil(
+            zone.corner(
+                at: CGPoint(x: 0.84, y: 0.78),
+                includeExpandedCorners: true
+            )
+        )
+
+        XCTAssertNil(
+            zone.corner(
+                at: CGPoint(x: 0.16, y: 0.22),
+                includeExpandedCorners: true
+            )
+        )
+
+        XCTAssertNil(
+            zone.corner(
+                at: CGPoint(x: 0.84, y: 0.22),
+                includeExpandedCorners: true
             )
         )
     }
@@ -65,33 +163,73 @@ final class CornerActivationZoneTests: XCTestCase {
         XCTAssertEqual(
             zone.corner(
                 at: CGPoint(x: 0.90, y: 0.90),
-                includeExpandedTopLeft: true
+                includeExpandedCorners: true
             ),
             .topRight
         )
         XCTAssertNil(
             zone.corner(
                 at: CGPoint(x: 0.90, y: 0.60),
-                includeExpandedTopLeft: true
+                includeExpandedCorners: true
             )
         )
     }
 
-    func testStrictTopLeftCanBeCheckedWithoutExpandedArea() {
+    func testStrictCornersCanBeCheckedWithoutExpandedAreas() {
         let zone = CornerActivationZone(edgeSize: 0.15)
 
         XCTAssertNil(
             zone.corner(
                 at: CGPoint(x: 0.10, y: 0.78),
-                includeExpandedTopLeft: false
+                includeExpandedCorners: false
             )
         )
+        XCTAssertNil(
+            zone.corner(
+                at: CGPoint(x: 0.90, y: 0.78),
+                includeExpandedCorners: false
+            )
+        )
+        XCTAssertNil(
+            zone.corner(
+                at: CGPoint(x: 0.10, y: 0.22),
+                includeExpandedCorners: false
+            )
+        )
+        XCTAssertNil(
+            zone.corner(
+                at: CGPoint(x: 0.90, y: 0.22),
+                includeExpandedCorners: false
+            )
+        )
+
         XCTAssertEqual(
             zone.corner(
                 at: CGPoint(x: 0.10, y: 0.90),
-                includeExpandedTopLeft: false
+                includeExpandedCorners: false
             ),
             .topLeft
+        )
+        XCTAssertEqual(
+            zone.corner(
+                at: CGPoint(x: 0.90, y: 0.90),
+                includeExpandedCorners: false
+            ),
+            .topRight
+        )
+        XCTAssertEqual(
+            zone.corner(
+                at: CGPoint(x: 0.10, y: 0.10),
+                includeExpandedCorners: false
+            ),
+            .bottomLeft
+        )
+        XCTAssertEqual(
+            zone.corner(
+                at: CGPoint(x: 0.90, y: 0.10),
+                includeExpandedCorners: false
+            ),
+            .bottomRight
         )
     }
 }

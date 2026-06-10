@@ -1,7 +1,7 @@
 import CoreGraphics
 
 struct CornerActivationZone {
-    static let defaultTopLeftMinimumY: CGFloat = 0.77
+    static let defaultFarEdgeBoundary: CGFloat = 0.77
 
     enum Corner {
         case topLeft
@@ -11,26 +11,26 @@ struct CornerActivationZone {
     }
 
     let edgeSize: CGFloat
-    let topLeftMinimumY: CGFloat
+    let farEdgeBoundary: CGFloat
 
     init(
         edgeSize: CGFloat,
-        topLeftMinimumY: CGFloat = Self.defaultTopLeftMinimumY
+        farEdgeBoundary: CGFloat = Self.defaultFarEdgeBoundary
     ) {
         self.edgeSize = edgeSize
-        self.topLeftMinimumY = topLeftMinimumY
+        self.farEdgeBoundary = farEdgeBoundary
     }
 
     func contains(_ position: CGPoint, corner: Corner) -> Bool {
         switch corner {
         case .topLeft:
-            return isLeft(position) && position.y >= topLeftMinimumY
+            return isTopBand(position) && isLeft(position)
         case .topRight:
-            return containsStrict(position, corner: .topRight)
+            return isTopBand(position) && isRight(position)
         case .bottomLeft:
-            return containsStrict(position, corner: .bottomLeft)
+            return isBottomBand(position) && isLeft(position)
         case .bottomRight:
-            return containsStrict(position, corner: .bottomRight)
+            return isBottomBand(position) && isRight(position)
         }
     }
 
@@ -47,9 +47,20 @@ struct CornerActivationZone {
         }
     }
 
-    func corner(at position: CGPoint, includeExpandedTopLeft: Bool) -> Corner? {
-        if includeExpandedTopLeft && contains(position, corner: .topLeft) {
-            return .topLeft
+    func corner(at position: CGPoint, includeExpandedCorners: Bool) -> Corner? {
+        if includeExpandedCorners {
+            if contains(position, corner: .topLeft) {
+                return .topLeft
+            }
+            if contains(position, corner: .topRight) {
+                return .topRight
+            }
+            if contains(position, corner: .bottomLeft) {
+                return .bottomLeft
+            }
+            if contains(position, corner: .bottomRight) {
+                return .bottomRight
+            }
         }
 
         if containsStrict(position, corner: .topLeft) {
@@ -74,6 +85,14 @@ struct CornerActivationZone {
 
     private func isRight(_ position: CGPoint) -> Bool {
         position.x > (1.0 - edgeSize)
+    }
+
+    private func isTopBand(_ position: CGPoint) -> Bool {
+        position.y >= farEdgeBoundary
+    }
+
+    private func isBottomBand(_ position: CGPoint) -> Bool {
+        position.y <= (1.0 - farEdgeBoundary)
     }
 
     private func isTop(_ position: CGPoint) -> Bool {

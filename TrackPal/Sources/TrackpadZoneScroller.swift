@@ -1249,14 +1249,14 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
         // Check corners first (highest priority)
         if cornerTriggerEnabled {
-            if let zone = cornerZone(at: position, includeExpandedTopLeft: true) {
+            if let zone = cornerZone(at: position, includeExpandedCorners: true) {
                 let action = cornerActions[zone] ?? .none
                 if action != .none {
                     return zone
                 }
             }
 
-            if cornerZone(at: position, includeExpandedTopLeft: false) != nil {
+            if cornerZone(at: position, includeExpandedCorners: false) != nil {
                 // Unassigned corners preserve native behavior.
                 return .center
             }
@@ -1328,13 +1328,13 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
     private func cornerZone(
         at position: CGPoint,
-        includeExpandedTopLeft: Bool
+        includeExpandedCorners: Bool
     ) -> ScrollZone? {
         let activationZone = CornerActivationZone(edgeSize: cornerTriggerZoneSize)
 
         guard let corner = activationZone.corner(
             at: position,
-            includeExpandedTopLeft: includeExpandedTopLeft
+            includeExpandedCorners: includeExpandedCorners
         ) else {
             return nil
         }
