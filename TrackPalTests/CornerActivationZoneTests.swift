@@ -19,9 +19,21 @@ final class CornerActivationZoneTests: XCTestCase {
 
         XCTAssertNil(
             zone.corner(
-                at: CGPoint(x: 0.10, y: 0.54),
+                at: CGPoint(x: 0.10, y: 0.49),
                 includeExpandedTopLeft: true
             )
+        )
+    }
+
+    func testTopLeftActionZoneIncludesHalfwayBoundary() {
+        let zone = CornerActivationZone(edgeSize: 0.15)
+
+        XCTAssertEqual(
+            zone.corner(
+                at: CGPoint(x: 0.03, y: 0.50),
+                includeExpandedTopLeft: true
+            ),
+            .topLeft
         )
     }
 

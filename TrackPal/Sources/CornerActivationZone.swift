@@ -1,7 +1,7 @@
 import CoreGraphics
 
 struct CornerActivationZone {
-    static let defaultTopLeftMinimumY: CGFloat = 0.55
+    static let defaultTopLeftMinimumY: CGFloat = 0.50
 
     enum Corner {
         case topLeft
@@ -24,7 +24,7 @@ struct CornerActivationZone {
     func contains(_ position: CGPoint, corner: Corner) -> Bool {
         switch corner {
         case .topLeft:
-            return isLeft(position) && position.y > topLeftMinimumY
+            return isLeft(position) && position.y >= topLeftMinimumY
         case .topRight:
             return containsStrict(position, corner: .topRight)
         case .bottomLeft:
