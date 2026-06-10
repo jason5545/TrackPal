@@ -19,7 +19,7 @@ final class CornerActivationZoneTests: XCTestCase {
 
         XCTAssertNil(
             zone.corner(
-                at: CGPoint(x: 0.10, y: 0.74),
+                at: CGPoint(x: 0.10, y: 0.76),
                 includeExpandedTopLeft: true
             )
         )
@@ -41,7 +41,7 @@ final class CornerActivationZoneTests: XCTestCase {
 
         XCTAssertEqual(
             zone.corner(
-                at: CGPoint(x: 0.03, y: 0.75),
+                at: CGPoint(x: 0.03, y: 0.77),
                 includeExpandedTopLeft: true
             ),
             .topLeft

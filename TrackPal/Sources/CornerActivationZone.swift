@@ -1,7 +1,7 @@
 import CoreGraphics
 
 struct CornerActivationZone {
-    static let defaultTopLeftMinimumY: CGFloat = 0.75
+    static let defaultTopLeftMinimumY: CGFloat = 0.77
 
     enum Corner {
         case topLeft
