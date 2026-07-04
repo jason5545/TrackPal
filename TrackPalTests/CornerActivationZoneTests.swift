@@ -175,6 +175,16 @@ final class CornerActivationZoneTests: XCTestCase {
         )
     }
 
+    func testContainsStrictSeparatesPhysicalCornerFromExpandedBand() {
+        let zone = CornerActivationZone(edgeSize: 0.15)
+        let bandPosition = CGPoint(x: 0.10, y: 0.78)
+        let strictPosition = CGPoint(x: 0.10, y: 0.90)
+
+        XCTAssertTrue(zone.contains(bandPosition, corner: .topLeft))
+        XCTAssertFalse(zone.containsStrict(bandPosition, corner: .topLeft))
+        XCTAssertTrue(zone.containsStrict(strictPosition, corner: .topLeft))
+    }
+
     func testStrictCornersCanBeCheckedWithoutExpandedAreas() {
         let zone = CornerActivationZone(edgeSize: 0.15)
 

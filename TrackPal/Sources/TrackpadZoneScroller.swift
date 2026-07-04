@@ -15,6 +15,7 @@ func CoreDockSendNotification(_ notification: CFString, _ unknown: UnsafeMutable
 final class TrackpadZoneScroller: @unchecked Sendable {
 
     static let shared = TrackpadZoneScroller()
+    private static let cornerMaxMovementBeforeForce: CGFloat = 0.025
 
     // MARK: - Configuration
 
@@ -182,10 +183,11 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private var currentTouchDensity: Float = 0      // latest density from processFilteredTouch
     private let activationFramesNeeded = 2
     private let activationMaxFrames = 8           // max wait when barely moving
+    private let cornerActivationMaxFrames = 12    // slower corner starts need a slightly wider promotion window
     private let directionCoherenceThreshold: CGFloat = 0.40
     private let minActivationMovement: CGFloat = 0.003
     private let minActivationVelocity: CGFloat = 0.08  // normalized units/sec on scroll axis
-    private let cornerPromotionMinMovement: CGFloat = 0.010   // require clearer intent from corners
+    private let cornerPromotionMinMovement: CGFloat = 0.006   // corner starts promote once movement is deliberate
     private let horizontalActivationMinMovement: CGFloat = 0.0065 // avoid tiny-jitter horizontal activation
     private let horizontalTapGuardMovement: CGFloat = 0.0060  // treat tiny jitter as click intent
     private let horizontalTapGuardFrames: Int = 3
@@ -205,6 +207,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private var forceActionTriggered: Bool = false
     private var forcePressThresholdRejected: Bool = false
     private let forcePressActionGate = ForcePressActionGate()
+    private let cornerForcePressActionGate = ForcePressActionGate(maxMovementBeforeForce: TrackpadZoneScroller.cornerMaxMovementBeforeForce)
     private let cornerForcePressThreshold: Float = 100.0
     private let cornerForceAssistedThreshold: Float = 70.0
     private let middleClickForcePressThreshold: Float = 70.0
@@ -318,6 +321,11 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
     enum ZoneCategory {
         case none, horizontal, vertical
+    }
+
+    private enum CornerForceRegion: String {
+        case strict
+        case band
     }
 
     enum ScrollZone {
@@ -563,7 +571,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
                         case .needMoreFrames:
                             // Keep waiting, but enforce upper limit
-                            if activationFrames.count >= activationMaxFrames {
+                            let maxFrames = isCornerZone(activationOriginalZone) ? cornerActivationMaxFrames : activationMaxFrames
+                            if activationFrames.count >= maxFrames {
                                 recordActivationFailure()
                                 isScrollActivationPending = false
                                 activationDeltas.removeAll()
@@ -1147,22 +1156,34 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                     force: force,
                     standardThreshold: middleClickForcePressThreshold,
                     assistedThreshold: middleClickForcePressThreshold,
-                    position: forcePosition
+                    position: forcePosition,
+                    actionGate: forcePressActionGate,
+                    maxMovementBeforeForce: tapMaxMovement
                 )
             }
             return
         }
 
         guard isCornerZone(currentZone) else { return }
-        guard isPosition(forcePosition, inCornerZone: currentZone) else { return }
+        guard let cornerForceRegion = cornerForceRegion(for: forcePosition, in: currentZone) else { return }
 
         forcePressMaxForce = max(forcePressMaxForce, force)
-        if force >= cornerForceAssistedThreshold {
+        let assistedThreshold: Float
+        if cornerForceRegion == .strict {
+            assistedThreshold = cornerForceAssistedThreshold
+        } else {
+            assistedThreshold = cornerForcePressThreshold
+        }
+
+        if force >= assistedThreshold {
             markForcePressSatisfied(
                 force: force,
                 standardThreshold: cornerForcePressThreshold,
-                assistedThreshold: cornerForceAssistedThreshold,
-                position: forcePosition
+                assistedThreshold: assistedThreshold,
+                position: forcePosition,
+                actionGate: cornerForcePressActionGate,
+                maxMovementBeforeForce: Self.cornerMaxMovementBeforeForce,
+                cornerRegion: cornerForceRegion
             )
         }
     }
@@ -1171,11 +1192,14 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         force: Float,
         standardThreshold: Float,
         assistedThreshold: Float,
-        position: CGPoint
+        position: CGPoint,
+        actionGate: ForcePressActionGate,
+        maxMovementBeforeForce: CGFloat,
+        cornerRegion: CornerForceRegion? = nil
     ) {
         guard !forcePressSatisfied else { return }
 
-        let decision = forcePressActionGate.evaluateForce(
+        let decision = actionGate.evaluateForce(
             force: force,
             standardThreshold: standardThreshold,
             assistedThreshold: assistedThreshold,
@@ -1187,7 +1211,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             if !forcePressThresholdRejected {
                 forcePressThresholdRejected = true
                 LogManager.shared.log(String(format: "Force action rejected: %@ movementBeforeForce=%.4f max=%.4f",
-                                             reason.rawValue, movementBeforeForce, tapMaxMovement))
+                                             reason.rawValue, movementBeforeForce, maxMovementBeforeForce))
             }
             return
         }
@@ -1212,8 +1236,9 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         activationDensities.removeAll()
         isActivelyScrollingInZone = false
 
-        LogManager.shared.log(String(format: "Corner force press accepted: zone=%@ source=%@ maxForce=%.1f",
-                                     String(describing: currentZone), forcePressSource, forcePressMaxForce))
+        let region = cornerRegion?.rawValue ?? "unknown"
+        LogManager.shared.log(String(format: "Corner force press accepted: zone=%@ region=%@ source=%@ maxForce=%.1f",
+                                     String(describing: currentZone), region, forcePressSource, forcePressMaxForce))
 
         let action = cornerActions[currentZone] ?? .none
         guard action != .none else { return }
@@ -1237,9 +1262,13 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         return false
     }
 
-    private func isPosition(_ position: CGPoint, inCornerZone zone: ScrollZone) -> Bool {
-        guard let corner = cornerActivationCorner(for: zone) else { return false }
-        return CornerActivationZone(edgeSize: cornerTriggerZoneSize).contains(position, corner: corner)
+    private func cornerForceRegion(for position: CGPoint, in zone: ScrollZone) -> CornerForceRegion? {
+        guard let corner = cornerActivationCorner(for: zone) else { return nil }
+
+        let activationZone = CornerActivationZone(edgeSize: cornerTriggerZoneSize)
+        guard activationZone.contains(position, corner: corner) else { return nil }
+
+        return activationZone.containsStrict(position, corner: corner) ? .strict : .band
     }
 
     private func determineZone(_ position: CGPoint) -> ScrollZone {

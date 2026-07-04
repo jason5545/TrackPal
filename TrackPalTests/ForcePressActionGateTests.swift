@@ -91,4 +91,22 @@ final class ForcePressActionGateTests: XCTestCase {
         XCTAssertEqual(reason, .movedTooFarBeforeForce)
         XCTAssertEqual(movementBeforeForce, 0.05, accuracy: 0.0001)
     }
+
+    func testRejectsScrollLikeMovementWithCornerSizedGate() {
+        let gate = ForcePressActionGate(maxMovementBeforeForce: 0.025)
+
+        let decision = gate.evaluateForce(
+            force: 200,
+            standardThreshold: 100,
+            assistedThreshold: 100,
+            touchStartPosition: CGPoint(x: 0.90, y: 0.02),
+            forcePosition: CGPoint(x: 0.93, y: 0.02)
+        )
+
+        guard case let .reject(reason: reason, movementBeforeForce: movementBeforeForce) = decision else {
+            return XCTFail("Expected corner force action to be rejected after scroll-like movement")
+        }
+        XCTAssertEqual(reason, .movedTooFarBeforeForce)
+        XCTAssertEqual(movementBeforeForce, 0.03, accuracy: 0.0001)
+    }
 }
