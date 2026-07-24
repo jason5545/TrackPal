@@ -19,6 +19,17 @@
 		A2000007232F0107 /* CornerActivationZone.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000015232F0115 /* CornerActivationZone.swift */; };
 		A2000008232F0108 /* CornerActivationZone.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000015232F0115 /* CornerActivationZone.swift */; };
 		A2000009232F0109 /* CornerActivationZoneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000016232F0116 /* CornerActivationZoneTests.swift */; };
+		A3000001232F0201 /* ScrollIntentGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000011232F0211 /* ScrollIntentGate.swift */; };
+		A3000002232F0202 /* ScrollIntentGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000011232F0211 /* ScrollIntentGate.swift */; };
+		A3000003232F0203 /* ScrollIntentGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000012232F0212 /* ScrollIntentGateTests.swift */; };
+		A4000001232F0301 /* TouchDeviceArbitrationGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4000011232F0311 /* TouchDeviceArbitrationGate.swift */; };
+		A4000002232F0302 /* TouchDeviceArbitrationGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4000011232F0311 /* TouchDeviceArbitrationGate.swift */; };
+		A4000003232F0303 /* TouchDeviceArbitrationGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4000012232F0312 /* TouchDeviceArbitrationGateTests.swift */; };
+		A5000001232F0401 /* DeviceCallbackContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000011232F0411 /* DeviceCallbackContext.swift */; };
+		A5000002232F0402 /* DeviceCallbackContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000011232F0411 /* DeviceCallbackContext.swift */; };
+		A6000001232F0501 /* TouchCallbackSequencer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6000011232F0511 /* TouchCallbackSequencer.swift */; };
+		A6000002232F0502 /* TouchCallbackSequencer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6000011232F0511 /* TouchCallbackSequencer.swift */; };
+		A6000003232F0503 /* TouchCallbackSequencerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6000012232F0512 /* TouchCallbackSequencerTests.swift */; };
 		A10000B0232F00B0 /* TrackPalApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A0232F00A0 /* TrackPalApp.swift */; };
 		A10000B1232F00B1 /* MenuBarPopupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A1232F00A1 /* MenuBarPopupView.swift */; };
 		A10000B2232F00B2 /* DesignTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A2232F00A2 /* DesignTokens.swift */; };
@@ -65,6 +76,13 @@
 		A2000014232F0114 /* PrimaryClickSuppressionGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrimaryClickSuppressionGateTests.swift; sourceTree = "<group>"; };
 		A2000015232F0115 /* CornerActivationZone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CornerActivationZone.swift; sourceTree = "<group>"; };
 		A2000016232F0116 /* CornerActivationZoneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CornerActivationZoneTests.swift; sourceTree = "<group>"; };
+		A3000011232F0211 /* ScrollIntentGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScrollIntentGate.swift; sourceTree = "<group>"; };
+		A3000012232F0212 /* ScrollIntentGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScrollIntentGateTests.swift; sourceTree = "<group>"; };
+		A4000011232F0311 /* TouchDeviceArbitrationGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchDeviceArbitrationGate.swift; sourceTree = "<group>"; };
+		A4000012232F0312 /* TouchDeviceArbitrationGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchDeviceArbitrationGateTests.swift; sourceTree = "<group>"; };
+		A5000011232F0411 /* DeviceCallbackContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCallbackContext.swift; sourceTree = "<group>"; };
+		A6000011232F0511 /* TouchCallbackSequencer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchCallbackSequencer.swift; sourceTree = "<group>"; };
+		A6000012232F0512 /* TouchCallbackSequencerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchCallbackSequencerTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -121,6 +139,10 @@
 				A2000011232F0111 /* ForcePressActionGate.swift */,
 				A2000013232F0113 /* PrimaryClickSuppressionGate.swift */,
 				A2000015232F0115 /* CornerActivationZone.swift */,
+				A3000011232F0211 /* ScrollIntentGate.swift */,
+				A4000011232F0311 /* TouchDeviceArbitrationGate.swift */,
+				A5000011232F0411 /* DeviceCallbackContext.swift */,
+				A6000011232F0511 /* TouchCallbackSequencer.swift */,
 				A1000018232F0008 /* TrackpadZoneScroller.swift */,
 				A10000AB232F00AB /* LocalizedNameProvider.swift */,
 				A10000AC232F00AC /* Localizable.xcstrings */,
@@ -188,6 +210,9 @@
 				A2000012232F0112 /* ForcePressActionGateTests.swift */,
 				A2000014232F0114 /* PrimaryClickSuppressionGateTests.swift */,
 				A2000016232F0116 /* CornerActivationZoneTests.swift */,
+				A3000012232F0212 /* ScrollIntentGateTests.swift */,
+				A4000012232F0312 /* TouchDeviceArbitrationGateTests.swift */,
+				A6000012232F0512 /* TouchCallbackSequencerTests.swift */,
 			);
 			path = TrackPalTests;
 			sourceTree = "<group>";
@@ -289,6 +314,10 @@
 				A2000001232F0101 /* ForcePressActionGate.swift in Sources */,
 				A2000004232F0104 /* PrimaryClickSuppressionGate.swift in Sources */,
 				A2000007232F0107 /* CornerActivationZone.swift in Sources */,
+				A3000001232F0201 /* ScrollIntentGate.swift in Sources */,
+				A4000001232F0301 /* TouchDeviceArbitrationGate.swift in Sources */,
+				A5000001232F0401 /* DeviceCallbackContext.swift in Sources */,
+				A6000001232F0501 /* TouchCallbackSequencer.swift in Sources */,
 				A1000008232F0008 /* TrackpadZoneScroller.swift in Sources */,
 				A10000B1232F00B1 /* MenuBarPopupView.swift in Sources */,
 				A10000B2232F00B2 /* DesignTokens.swift in Sources */,
@@ -311,9 +340,16 @@
 				A2000002232F0102 /* ForcePressActionGate.swift in Sources */,
 				A2000005232F0105 /* PrimaryClickSuppressionGate.swift in Sources */,
 				A2000008232F0108 /* CornerActivationZone.swift in Sources */,
+				A3000002232F0202 /* ScrollIntentGate.swift in Sources */,
+				A4000002232F0302 /* TouchDeviceArbitrationGate.swift in Sources */,
+				A5000002232F0402 /* DeviceCallbackContext.swift in Sources */,
+				A6000002232F0502 /* TouchCallbackSequencer.swift in Sources */,
 				A2000003232F0103 /* ForcePressActionGateTests.swift in Sources */,
 				A2000006232F0106 /* PrimaryClickSuppressionGateTests.swift in Sources */,
 				A2000009232F0109 /* CornerActivationZoneTests.swift in Sources */,
+				A3000003232F0203 /* ScrollIntentGateTests.swift in Sources */,
+				A4000003232F0303 /* TouchDeviceArbitrationGateTests.swift in Sources */,
+				A6000003232F0503 /* TouchCallbackSequencerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

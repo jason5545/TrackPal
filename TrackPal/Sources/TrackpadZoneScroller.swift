@@ -131,6 +131,14 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     // MARK: - State
 
     private var devices: [MTDeviceRef?] = []
+    private var deviceCallbackContexts: [DeviceCallbackContext] = []
+    // MultitouchSupport does not document whether unregister/stop drains an
+    // already-running callback synchronously. Retain retired refcons for the
+    // process lifetime so a late callback can fail its active-ID check safely.
+    private var retiredDeviceCallbackContexts: [DeviceCallbackContext] = []
+    private var activeDeviceCallbackIDs: Set<Int> = []
+    private var nextDeviceCallbackID = 0
+    private var touchDeviceArbitrationGate = TouchDeviceArbitrationGate()
     private var lastTouchPosition: CGPoint = .zero
     private var currentZone: ScrollZone = .none
     private var isTracking: Bool = false
@@ -138,12 +146,12 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     // Concurrent touch detection state
     private var currentGestureMode: GestureMode = .idle
     private var activeFingerCount: Int = 0
-    private var multiToSingleTransitionTime: Double = 0
-    private let multiToSingleDebounce: Double = 0.15  // 150ms debounce
+    private var requiresAllFingersLifted = false
 
     // Thread-safe flag for active zone scrolling (used by CGEventTap interceptor)
     // Using os_unfair_lock instead of NSLock to avoid deadlock from C callback threads
     private var _isActivelyScrollingInZone: Bool = false
+    private var _isEvaluatingScrollCandidate: Bool = false
     private var scrollZoneLock = os_unfair_lock()
 
     var isActivelyScrollingInZone: Bool {
@@ -159,10 +167,21 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         }
     }
 
+    var isEvaluatingScrollCandidate: Bool {
+        get {
+            os_unfair_lock_lock(&scrollZoneLock)
+            defer { os_unfair_lock_unlock(&scrollZoneLock) }
+            return _isEvaluatingScrollCandidate
+        }
+        set {
+            os_unfair_lock_lock(&scrollZoneLock)
+            _isEvaluatingScrollCandidate = newValue
+            os_unfair_lock_unlock(&scrollZoneLock)
+        }
+    }
+
     // Velocity tracking for inertia
     private var lastTouchTime: Double = 0
-    private var velocityX: CGFloat = 0
-    private var velocityY: CGFloat = 0
     private var velocityHistory: [(vx: CGFloat, vy: CGFloat, time: Double)] = []
     private let velocityHistorySize = 5
 
@@ -176,29 +195,24 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     // Scroll activation: determine if user really wants to scroll
     private var isScrollActivationPending: Bool = false
     private var activationOriginalZone: ScrollZone = .none  // original zone before promotion
-    private var activationFrames: [(x: CGFloat, y: CGFloat)] = []
     private var activationDeltas: [CGPoint] = []
-    private var activationDensities: [Float] = []  // density per delta frame
-    private var activationConfidence: CGFloat = 0   // diagnostic activation confidence
-    private var currentTouchDensity: Float = 0      // latest density from processFilteredTouch
-    private let activationFramesNeeded = 2
-    private let activationMaxFrames = 8           // max wait when barely moving
-    private let cornerActivationMaxFrames = 12    // slower corner starts need a slightly wider promotion window
-    private let directionCoherenceThreshold: CGFloat = 0.40
-    private let minActivationMovement: CGFloat = 0.003
-    private let minActivationVelocity: CGFloat = 0.08  // normalized units/sec on scroll axis
-    private let cornerPromotionMinMovement: CGFloat = 0.006   // corner starts promote once movement is deliberate
-    private let horizontalActivationMinMovement: CGFloat = 0.0065 // avoid tiny-jitter horizontal activation
-    private let horizontalTapGuardMovement: CGFloat = 0.0060  // treat tiny jitter as click intent
-    private let horizontalTapGuardFrames: Int = 3
-    private var horizontalScrollLockUntilUptimeNs: UInt64 = 0
+    private var activationSampleTimestamps: [Double] = []
+    private var activationDeltaAccumulator: CGPoint = .zero
+    private var activationWindowStartTimestamp: Double = 0
+    private var activationLastEvidenceUptime: Double?
+    private var scrollIntentGate: ScrollIntentGate?
+    private let minimumActivationSampleDistance: CGFloat = 0.0005
+    private let minimumEvidenceActivityDistance: CGFloat = 0.00005
+    private let activationEvidenceGapDeadline: Double = 0.18
+    private let activationSafetyMaxSamples = 24
+    private var horizontalScrollLockedUntilLift = false
     private var hasLoggedHorizontalLockSuppressionInTouch: Bool = false
-    private let rightClickHorizontalScrollLockDuration: Double = 0.30  // 300ms cooldown
 
     // Tap detection for middle click
     private var touchStartTime: Double = 0
+    private var touchStartUptime: Double = 0
     private var touchStartPosition: CGPoint = .zero
-    private let tapMaxDuration: Double = 0.3      // 300ms
+    private var maxTouchDisplacement: CGFloat = 0
     private let tapMaxMovement: CGFloat = ForcePressActionGate.defaultMaxMovementBeforeForce
     private let forcePressMaxDuration: Double = 1.0
     private var forcePressSatisfied: Bool = false
@@ -206,126 +220,59 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private var forcePressSource: String = "none"
     private var forceActionTriggered: Bool = false
     private var forcePressThresholdRejected: Bool = false
+    private var forceGestureDisqualified = false
+    private var cornerForceWindowExpired = false
+    private var isTouchEnding = false
+    private var touchEndingTimestamp: Double?
+    private var pendingForceEvaluation: PendingForceEvaluation?
     private let forcePressActionGate = ForcePressActionGate()
     private let cornerForcePressActionGate = ForcePressActionGate(maxMovementBeforeForce: TrackpadZoneScroller.cornerMaxMovementBeforeForce)
     private let cornerForcePressThreshold: Float = 100.0
     private let cornerForceAssistedThreshold: Float = 70.0
     private let middleClickForcePressThreshold: Float = 70.0
 
-    // MARK: - Legacy Adaptive Tuning State
+    // A filter spike at the physical edge should not split one contact into two
+    // gestures. Three consecutive invalid frames cancel and quarantine the
+    // contact until every finger has lifted.
+    private var consecutiveInvalidTouchFrames = 0
+    private var pretrackingInvalidTouchFrames = 0
+    private let invalidTouchFramesBeforeCancellation = 3
+    private var isContactQuarantinedUntilLift = false
+    private var forceEvaluationSuspendedByInvalidTouch = false
 
-    /// Learned direction center (EMA of on-axis ratios from successful activations)
-    private var learnedDirectionCenterH: CGFloat = 0.50
-    private var learnedDirectionCenterV: CGFloat = 0.50
-    private let directionDeadZone: CGFloat = 0.05
-    private var onAxisRatioBuffer: [(isHorizontal: Bool, ratio: CGFloat)] = []
+    // Per-contact identity is also used to scope native click suppression.
+    private var nextTouchSessionID: UInt64 = 0
+    private var activeTouchSessionID: UInt64?
+    private var pendingForceClickSessionID: UInt64?
+    private var shouldReplayPendingPrimaryClick = false
 
-    /// Retry detection: tracks missed scrolls and immediate retries
-    private var lastMissZoneCategory: ZoneCategory = .none
-    private var lastMissTimestamp: Double = 0
-    private var retryCountH: Int = 0, missCountH: Int = 0
-    private var retryCountV: Int = 0, missCountV: Int = 0
-    private var retryBonusH: CGFloat = 0.0, retryBonusV: CGFloat = 0.0
-
-    /// Counter for persistence throttling (save every 20 learning events)
-    private var learningEventCount: Int = 0
-
-    // MARK: - False Activation Learning
-
-    /// Records of recent scroll sessions for false activation detection
-    private var scrollSessionHistory: [ScrollSessionRecord] = []
-    private let maxSessionHistorySize = 50
-
-    /// Thresholds for false activation detection (will be learned)
-    private var falseActivationThresholds: [ScrollZone: FalseActivationThreshold] = [:]
-
-    /// Current active scroll session (for tracking duration and distance)
-    private var currentScrollSession: ScrollSessionRecord?
-
-    /// Structure to record a scroll session
-    struct ScrollSessionRecord {
-        let zone: ScrollZone
-        let startTime: Double
-        var endTime: Double?
-        var totalDistance: CGFloat = 0
-        var maxVelocity: CGFloat = 0
-        var directionChanges: Int = 0
-        var wasCancelled: Bool = false
-        var activationData: ActivationData
-
-        struct ActivationData {
-            let onAxisRatio: CGFloat
-            let offAxisSpeed: CGFloat
-            let onAxisSpeed: CGFloat
-            let density: Float
-            let confidence: CGFloat
-        }
-
-        var duration: Double {
-            guard let end = endTime else { return 0 }
-            return end - startTime
-        }
-
-        var isFalseActivation: Bool {
-            // Short duration (< 300ms) and short distance (< 0.05) indicates false activation
-            let basicFalseActivation = duration < 0.3 && totalDistance < 0.05 && !wasCancelled
-            
-            // Additional check for horizontal zones: very short sessions may be misclassified clicks
-            // But be careful not to be too aggressive - we want to catch actual mistakes without
-            // penalizing quick, intentional horizontal scrolls
-            let isHorizontalZone = (zone == .bottomEdge || zone == .topEdge)
-            if isHorizontalZone && !wasCancelled {
-                // Only flag as false activation if it's VERY clearly a mistake:
-                // - Extremely short duration (< 100ms) - this is almost certainly a tap/click
-                // - Very short duration (< 200ms) with very low quality metrics
-                let extremelyShort = duration < 0.10
-                let veryShortWithLowQuality = duration < 0.20 && 
-                                               activationData.onAxisRatio < 0.55 && 
-                                               activationData.confidence < 0.80
-                
-                if extremelyShort || veryShortWithLowQuality {
-                    return true
-                }
-            }
-            
-            return basicFalseActivation
-        }
-    }
-
-    /// Learned thresholds for false activation detection per zone
-    struct FalseActivationThreshold {
-        var minDuration: Double = 0.3
-        var minDistance: CGFloat = 0.05
-        var minOnAxisRatio: CGFloat = 0.35
-        var maxOffAxisRatio: CGFloat = 0.65
-        var sampleCount: Int = 0
-
-        /// Update thresholds based on false positive patterns
-        mutating func learnFromFalseActivation(_ session: ScrollSessionRecord) {
-            sampleCount += 1
-            let alpha = min(CGFloat(sampleCount) / 100.0, 0.1) // Learning rate capped at 0.1
-
-            // If this was a false activation, tighten thresholds
-            if session.isFalseActivation {
-                minDuration = minDuration * (1.0 + alpha * 0.1) // Increase min duration slightly
-                minDistance = minDistance * (1.0 + alpha * 0.1) // Increase min distance slightly
-                minOnAxisRatio = min(minOnAxisRatio * (1.0 + alpha * 0.05), 0.5) // Increase min ratio, cap at 0.5
-            } else {
-                // Successful scroll - loosen thresholds slightly (but not below defaults)
-                minDuration = max(minDuration * (1.0 - alpha * 0.02), 0.2)
-                minDistance = max(minDistance * (1.0 - alpha * 0.02), 0.03)
-                minOnAxisRatio = max(minOnAxisRatio * (1.0 - alpha * 0.01), 0.3)
-            }
-        }
-    }
-
-    enum ZoneCategory {
-        case none, horizontal, vertical
-    }
+    // Terminal telemetry. One concise record per physical contact is much more
+    // useful than several unrelated threshold messages.
+    private var gestureOutcome = "none"
+    private var gestureInitialZone: ScrollZone = .none
+    private var gesturePathX: CGFloat = 0
+    private var gesturePathY: CGFloat = 0
+    private var gestureNetX: CGFloat = 0
+    private var gestureNetY: CGFloat = 0
+    private var emittedScrollEventCount = 0
+    private var emittedScrollPixelsX: Int64 = 0
+    private var emittedScrollPixelsY: Int64 = 0
 
     private enum CornerForceRegion: String {
         case strict
         case band
+    }
+
+    private enum PendingForceTarget {
+        case middleClick
+        case corner(CornerForceRegion)
+    }
+
+    private struct PendingForceEvaluation {
+        let target: PendingForceTarget
+        var force: Float
+        var sampleTimestamp: Double
+        var sampleUptime: Double
     }
 
     enum ScrollZone {
@@ -381,6 +328,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         guard !isEnabled else { return }
 
         LogManager.shared.log("Starting zone scroller...")
+        resetInputLifecycleForRestart()
 
         guard let cfArray = MTDeviceCreateList() else {
             LogManager.shared.log("MTDeviceCreateList returned nil")
@@ -403,13 +351,20 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             // MTDeviceRef is void* - use UnsafeMutableRawPointer
             let device = UnsafeMutableRawPointer(mutating: rawPtr)
             devices.append(device)
+            nextDeviceCallbackID &+= 1
+            let callbackContext = DeviceCallbackContext(
+                deviceID: nextDeviceCallbackID
+            )
+            deviceCallbackContexts.append(callbackContext)
+            activeDeviceCallbackIDs.insert(callbackContext.deviceID)
+            let callbackRefcon = Unmanaged.passUnretained(callbackContext).toOpaque()
 
             LogManager.shared.log("Device \(i) found, registering callback...")
 
             // Use the refcon variant for better compatibility
-            MTRegisterContactFrameCallbackWithRefcon(device, touchCallbackWithRefcon, nil)
+            MTRegisterContactFrameCallbackWithRefcon(device, touchCallbackWithRefcon, callbackRefcon)
             if MTDeviceSupportsForce(device) {
-                MTRegisterForceCentroidCallbackWithRefcon(device, forceCentroidCallbackWithRefcon, nil)
+                MTRegisterForceCentroidCallbackWithRefcon(device, forceCentroidCallbackWithRefcon, callbackRefcon)
                 LogManager.shared.log("Device \(i) supports force, registered force callback")
             } else {
                 LogManager.shared.log("Device \(i) does not support force; force-gated actions unavailable")
@@ -426,25 +381,79 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     }
 
     func stop() {
-        guard isEnabled else { return }
+        if isTracking {
+            cancelActiveScrolling(reason: "stopped")
+        }
 
         // Stop scroll event interceptor
         ScrollEventInterceptor.shared.stop()
 
+        guard isEnabled else {
+            resetInputLifecycleForRestart()
+            return
+        }
+
         for device in devices {
+            MTUnregisterContactFrameCallbackWithRefcon(
+                device,
+                touchCallbackWithRefcon
+            )
             MTUnregisterForceCentroidCallback(device, forceCentroidCallbackWithRefcon)
             MTDeviceStop(device)
         }
 
         devices.removeAll()
+        retiredDeviceCallbackContexts.append(contentsOf: deviceCallbackContexts)
+        deviceCallbackContexts.removeAll()
+        resetInputLifecycleForRestart()
         isEnabled = false
         LogManager.shared.log("Trackpad zone scrolling disabled")
     }
 
+    /// Stop/start is also a hard physical-contact boundary. Without clearing
+    /// these flags, disabling TrackPal during a multi-touch or quarantined
+    /// contact can poison the first complete gesture after it is re-enabled.
+    private func resetInputLifecycleForRestart() {
+        activeDeviceCallbackIDs.removeAll()
+        touchDeviceArbitrationGate.reset()
+        currentGestureMode = .idle
+        activeFingerCount = 0
+        requiresAllFingersLifted = false
+        isContactQuarantinedUntilLift = false
+        consecutiveInvalidTouchFrames = 0
+        pretrackingInvalidTouchFrames = 0
+        forceEvaluationSuspendedByInvalidTouch = false
+        cornerForceWindowExpired = false
+        isTouchEnding = false
+        touchEndingTimestamp = nil
+        pendingForceEvaluation = nil
+        isActivelyScrollingInZone = false
+        isEvaluatingScrollCandidate = false
+    }
+
+    func isDeviceCallbackActive(deviceID: Int) -> Bool {
+        activeDeviceCallbackIDs.contains(deviceID)
+    }
+
     // MARK: - Touch Processing
 
-    func processTouch(x: Float, y: Float, state: Int32, timestamp: Double) {
+    func processTouch(
+        x: Float,
+        y: Float,
+        state: Int32,
+        timestamp: Double,
+        eventUptime: Double
+    ) {
         let position = CGPoint(x: CGFloat(x), y: CGFloat(y))
+        let chronologicalEventUptime: Double
+        if isTracking,
+           timestamp.isFinite,
+           timestamp >= touchStartTime {
+            chronologicalEventUptime = touchStartUptime
+                + (timestamp - touchStartTime)
+        } else {
+            chronologicalEventUptime = eventUptime
+        }
 
         // Touch states from MultitouchSupport:
         // 1 = not touching (hovering)
@@ -457,6 +466,10 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
         switch state {
         case 2, 3, 4, 5: // Touch active states
+            guard !isContactQuarantinedUntilLift else { return }
+            isTouchEnding = false
+            touchEndingTimestamp = nil
+
             if !isTracking {
                 isTracking = true
                 lastTouchPosition = position
@@ -465,16 +478,47 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
                 // Record for tap detection
                 touchStartTime = timestamp
+                touchStartUptime = eventUptime
                 touchStartPosition = position
+                maxTouchDisplacement = 0
                 forcePressSatisfied = false
                 forcePressMaxForce = 0
                 forcePressSource = "none"
                 forceActionTriggered = false
                 forcePressThresholdRejected = false
+                forceGestureDisqualified = false
+                cornerForceWindowExpired = false
+                pendingForceEvaluation = nil
+                forceEvaluationSuspendedByInvalidTouch = false
+                consecutiveInvalidTouchFrames = 0
+                pretrackingInvalidTouchFrames = 0
+
+                nextTouchSessionID &+= 1
+                activeTouchSessionID = nextTouchSessionID
+                gestureOutcome = "pending"
+                gesturePathX = 0
+                gesturePathY = 0
+                gestureNetX = 0
+                gestureNetY = 0
+                emittedScrollEventCount = 0
+                emittedScrollPixelsX = 0
+                emittedScrollPixelsY = 0
+
                 let preliminaryZone = determineZone(position)
                 currentZone = preliminaryZone
+                gestureInitialZone = preliminaryZone
                 if shouldPreemptNativePrimaryClick(for: preliminaryZone) {
-                    ScrollEventInterceptor.shared.suppressPrimaryClickForPendingForceAction()
+                    pendingForceClickSessionID = activeTouchSessionID
+                    shouldReplayPendingPrimaryClick = true
+                    if let sessionID = activeTouchSessionID {
+                        ScrollEventInterceptor.shared.beginPendingForceGesture(
+                            token: sessionID,
+                            gestureUptime: chronologicalEventUptime
+                        )
+                    }
+                } else {
+                    pendingForceClickSessionID = nil
+                    shouldReplayPendingPrimaryClick = false
                 }
 
                 if isScrollZone(preliminaryZone) {
@@ -483,12 +527,16 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                     // Normal edge scrolling does not require force.
                     isScrollActivationPending = true
                     activationOriginalZone = preliminaryZone
-                    activationFrames = [(x: position.x, y: position.y)]
                     activationDeltas = []
-                    activationDensities = []
-                    activationConfidence = 0
-                    isActivelyScrollingInZone = true
-                    LogManager.shared.log(String(format: "Touch started at (%.2f, %.2f) zone: \(preliminaryZone) [SCROLL-PENDING]", x, y))
+                    activationSampleTimestamps = []
+                    activationDeltaAccumulator = .zero
+                    activationWindowStartTimestamp = timestamp
+                    activationLastEvidenceUptime = nil
+                    scrollIntentGate = makeScrollIntentGate(for: preliminaryZone)
+                    isActivelyScrollingInZone = false
+                    isEvaluatingScrollCandidate = true
+                    LogManager.shared.log(String(format: "Gesture %llu started at (%.3f, %.3f) zone=%@ [SCROLL-PENDING]",
+                                                 activeTouchSessionID ?? 0, x, y, String(describing: preliminaryZone)))
                 } else if isCornerZone(preliminaryZone) {
                     // Cancel any running inertia from a previous scroll direction
                     DispatchQueue.main.async { InertiaScroller.shared.stopInertia() }
@@ -496,115 +544,70 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                     // if user slides (not taps), promote to adjacent scroll zone.
                     isScrollActivationPending = true
                     activationOriginalZone = preliminaryZone
-                    activationFrames = [(x: position.x, y: position.y)]
                     activationDeltas = []
-                    activationDensities = []
-                    activationConfidence = 0  // will be set after corner promotion
-                    isActivelyScrollingInZone = true
-                    LogManager.shared.log(String(format: "Touch started at (%.2f, %.2f) zone: \(preliminaryZone) [CORNER-PENDING]", x, y))
+                    activationSampleTimestamps = []
+                    activationDeltaAccumulator = .zero
+                    activationWindowStartTimestamp = timestamp
+                    activationLastEvidenceUptime = nil
+                    scrollIntentGate = nil
+                    isActivelyScrollingInZone = false
+                    isEvaluatingScrollCandidate = true
+                    LogManager.shared.log(String(format: "Gesture %llu started at (%.3f, %.3f) zone=%@ [CORNER-PENDING]",
+                                                 activeTouchSessionID ?? 0, x, y, String(describing: preliminaryZone)))
                 } else {
                     isScrollActivationPending = false
-                    LogManager.shared.log(String(format: "Touch started at (%.2f, %.2f) zone: \(currentZone)", x, y))
+                    scrollIntentGate = nil
+                    isEvaluatingScrollCandidate = false
+                    LogManager.shared.log(String(format: "Gesture %llu started at (%.3f, %.3f) zone=%@",
+                                                 activeTouchSessionID ?? 0, x, y, String(describing: currentZone)))
                 }
             } else {
-                let delta = CGPoint(
-                    x: position.x - lastTouchPosition.x,
-                    y: position.y - lastTouchPosition.y
+                processTrackedMovement(
+                    to: position,
+                    timestamp: timestamp,
+                    eventUptime: chronologicalEventUptime
                 )
-                // Calculate instantaneous velocity
-                let dt = timestamp - lastTouchTime
-                if dt > 0 {
-                    let vx = delta.x / CGFloat(dt)
-                    let vy = delta.y / CGFloat(dt)
-
-                    // Store in history for smoothing
-                    velocityHistory.append((vx: vx, vy: vy, time: timestamp))
-                    if velocityHistory.count > velocityHistorySize {
-                        velocityHistory.removeFirst()
-                    }
-                }
-
-                // Scroll activation: evaluate direction coherence
-                if isScrollActivationPending {
-                    activationFrames.append((x: position.x, y: position.y))
-
-                    // Skip the very first delta (frame 1): the initial contact
-                    // frame is often noisy, especially at sensor edges where the
-                    // finger is only partially on the trackpad surface.
-                    if activationFrames.count > 1 {
-                        activationDeltas.append(delta)
-                        activationDensities.append(currentTouchDensity)
-                    }
-
-                    // Evaluate from the first usable delta frame onward
-                    if activationDeltas.count >= 1 {
-                        let result = evaluateScrollIntent()
-                        switch result {
-                        case .activated:
-                            recordSuccessfulActivation()
-                            isScrollActivationPending = false
-                            // Flush buffered deltas with graduated ramp-up to avoid jump
-                            let count = activationDeltas.count
-                            for (index, buffered) in activationDeltas.enumerated() {
-                                let ramp = CGFloat(index + 1) / CGFloat(count + 1)
-                                let scaled = CGPoint(x: buffered.x * ramp, y: buffered.y * ramp)
-                                handleScroll(delta: scaled, zone: currentZone)
-                            }
-                            activationDeltas.removeAll()
-                            LogManager.shared.log("Scroll activated: \(currentZone)")
-
-                        case .rejected:
-                            recordActivationFailure()
-                            isScrollActivationPending = false
-                            activationDeltas.removeAll()
-                            activationDensities.removeAll()
-                            activationConfidence = 0
-                            isActivelyScrollingInZone = false  // Release suppression
-                            if isCornerZone(activationOriginalZone) {
-                                // Restore corner zone so tap handler can still fire on lift-off
-                                currentZone = activationOriginalZone
-                                LogManager.shared.log("Scroll rejected → restored \(activationOriginalZone) (corner tap still possible)")
-                            } else {
-                                currentZone = .center
-                                LogManager.shared.log("Scroll rejected → center (cursor movement)")
-                            }
-
-                        case .needMoreFrames:
-                            // Keep waiting, but enforce upper limit
-                            let maxFrames = isCornerZone(activationOriginalZone) ? cornerActivationMaxFrames : activationMaxFrames
-                            if activationFrames.count >= maxFrames {
-                                recordActivationFailure()
-                                isScrollActivationPending = false
-                                activationDeltas.removeAll()
-                                activationDensities.removeAll()
-                                activationConfidence = 0
-                                isActivelyScrollingInZone = false  // Release suppression
-                                if isCornerZone(activationOriginalZone) {
-                                    currentZone = activationOriginalZone
-                                    LogManager.shared.log("Scroll timeout → restored \(activationOriginalZone)")
-                                } else {
-                                    currentZone = .center
-                                    LogManager.shared.log("Scroll timeout → center")
-                                }
-                            }
-
-                        }
-                    }
-                } else {
-                    handleScroll(delta: delta, zone: currentZone)
-                }
-
-                lastTouchPosition = position
-                lastTouchTime = timestamp
             }
 
-        case 6, 7: // Touch ending/released
+        case 6: // Lifting; wait for the real zero-touch/released boundary.
+            guard isTracking else { return }
+            // MultitouchSupport can report the final physical displacement on
+            // state 6. Feed it through the exact same trajectory path before
+            // closing the force window, otherwise a legitimate threshold tail
+            // disappears at lift.
+            processTrackedMovement(
+                to: position,
+                timestamp: timestamp,
+                eventUptime: chronologicalEventUptime
+            )
+            isTouchEnding = true
+            touchEndingTimestamp = timestamp
+
+        case 7: // Released / zero-touch boundary
+            guard isTracking else { return }
+            isTouchEnding = true
+            if touchEndingTimestamp == nil {
+                touchEndingTimestamp = timestamp
+            }
+
+            finalizeScrollActivationOnRelease(
+                timestamp: timestamp,
+                eventUptime: chronologicalEventUptime
+            )
+
+            // A force callback can arrive after the last moving frame. Commit it
+            // here only after the complete touch trajectory is known.
+            if !forceGestureDisqualified {
+                commitPendingForceEvaluation(allowDuringRelease: true)
+            }
+
             if currentZone == .middleClick {
                 handleMiddleClickTap(endPosition: lastTouchPosition, endTime: timestamp)
             } else if isCornerZone(currentZone) {
                 handleCornerTap(zone: currentZone, endPosition: lastTouchPosition, endTime: timestamp)
             } else if isScrollActivationPending && isScrollZone(currentZone) {
                 LogManager.shared.log("Touch released during scroll activation pending → no scroll")
+                gestureOutcome = "tap-in-scroll-zone"
             } else {
                 // Send scroll phase ended event before starting inertia
                 if hasEmittedScrollBegan {
@@ -612,11 +615,112 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 }
                 startInertiaIfNeeded()
             }
+            resolvePendingPrimaryClick(
+                replayCapturedClick: shouldReplayPendingPrimaryClick && !forceActionTriggered,
+                gestureUptime: chronologicalEventUptime
+            )
             resetTracking()
 
         default:
             break
         }
+    }
+
+    private func processTrackedMovement(
+        to position: CGPoint,
+        timestamp: Double,
+        eventUptime: Double
+    ) {
+        let delta = CGPoint(
+            x: position.x - lastTouchPosition.x,
+            y: position.y - lastTouchPosition.y
+        )
+        maxTouchDisplacement = max(
+            maxTouchDisplacement,
+            physicalTouchDistance(from: touchStartPosition, to: position)
+        )
+        gesturePathX += abs(delta.x)
+        gesturePathY += abs(delta.y)
+        gestureNetX += delta.x
+        gestureNetY += delta.y
+
+        let wasEvaluatingScroll = isScrollActivationPending
+
+        let dt = timestamp - lastTouchTime
+        if dt > 0, !wasEvaluatingScroll {
+            velocityHistory.append((
+                vx: delta.x / CGFloat(dt),
+                vy: delta.y / CGFloat(dt),
+                time: timestamp
+            ))
+            if velocityHistory.count > velocityHistorySize {
+                velocityHistory.removeFirst()
+            }
+        }
+
+        // Scroll direction gets the first decision on this touch frame. A
+        // queued force sample is committed only afterwards, using the complete
+        // trajectory through this hardware timestamp.
+        if wasEvaluatingScroll {
+            expireCornerForceWindowIfNeeded(
+                at: eventUptime,
+                activationTimestamp: timestamp
+            )
+            if scrollActivationEvidenceHasGoneStale(at: eventUptime) {
+                restartScrollActivationEvidence(at: timestamp)
+            }
+        }
+
+        if isScrollActivationPending {
+            var didAppendActivationSample = false
+            let deltaMagnitude = physicalDeltaMagnitude(delta)
+
+            // While no evidence exists, stationary callbacks keep the velocity
+            // window anchored at the last real sensor frame. A deliberate flick
+            // after a long hold is then measured from its actual onset, not from
+            // the original touch-down time.
+            if activationDeltas.isEmpty,
+               physicalDeltaMagnitude(activationDeltaAccumulator)
+                    < minimumEvidenceActivityDistance,
+               activationLastEvidenceUptime == nil,
+               deltaMagnitude < minimumEvidenceActivityDistance {
+                activationWindowStartTimestamp = timestamp
+            }
+
+            activationDeltaAccumulator.x += delta.x
+            activationDeltaAccumulator.y += delta.y
+            if deltaMagnitude >= minimumEvidenceActivityDistance {
+                activationLastEvidenceUptime = eventUptime
+            }
+
+            if physicalDeltaMagnitude(activationDeltaAccumulator)
+                >= minimumActivationSampleDistance {
+                activationDeltas.append(activationDeltaAccumulator)
+                activationSampleTimestamps.append(timestamp)
+                activationDeltaAccumulator = .zero
+                didAppendActivationSample = true
+            }
+
+            if didAppendActivationSample {
+                applyScrollIntentResult(
+                    evaluateScrollIntent(),
+                    eventUptime: eventUptime
+                )
+            }
+        }
+
+        if !forceActionTriggered,
+           !forceGestureDisqualified,
+           !shouldDeferPendingForceForScrollEvidence() {
+            commitPendingForceEvaluation()
+        }
+
+        if !wasEvaluatingScroll && !forceActionTriggered {
+            handleScroll(delta: delta, zone: currentZone)
+        }
+
+        lastTouchPosition = position
+        lastTouchTime = timestamp
     }
 
     private func startInertiaIfNeeded() {
@@ -667,30 +771,62 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     }
 
     func resetTracking() {
-        // Finalize any active scroll session before resetting
-        if currentScrollSession != nil {
-            finalizeScrollSession(wasCancelled: false)
+        if let sessionID = activeTouchSessionID {
+            let duration = max(0, CACurrentMediaTime() - touchStartUptime)
+            LogManager.shared.log(String(
+                format: "Gesture %llu terminal outcome=%@ initial=%@ final=%@ duration=%.3f maxExcursion=%.4f path=(%.4f,%.4f) net=(%.4f,%.4f) force=%.1f scrollEvents=%d pixels=(%lld,%lld)",
+                sessionID,
+                gestureOutcome,
+                String(describing: gestureInitialZone),
+                String(describing: currentZone),
+                duration,
+                maxTouchDisplacement,
+                gesturePathX,
+                gesturePathY,
+                gestureNetX,
+                gestureNetY,
+                forcePressMaxForce,
+                emittedScrollEventCount,
+                emittedScrollPixelsX,
+                emittedScrollPixelsY
+            ))
         }
 
         isTracking = false
         currentZone = .none
         isScrollActivationPending = false
         activationOriginalZone = .none
-        activationFrames.removeAll()
         activationDeltas.removeAll()
-        activationDensities.removeAll()
-        activationConfidence = 0
+        activationSampleTimestamps.removeAll()
+        activationDeltaAccumulator = .zero
+        activationWindowStartTimestamp = 0
+        activationLastEvidenceUptime = nil
+        scrollIntentGate = nil
         velocityHistory.removeAll()
         scrollAccumulatorX = 0
         scrollAccumulatorY = 0
         hasLoggedHorizontalLockSuppressionInTouch = false
         hasEmittedScrollBegan = false
+        horizontalScrollLockedUntilLift = false
         forcePressSatisfied = false
         forcePressMaxForce = 0
         forcePressSource = "none"
         forceActionTriggered = false
         forcePressThresholdRejected = false
+        forceGestureDisqualified = false
+        cornerForceWindowExpired = false
+        isTouchEnding = false
+        touchEndingTimestamp = nil
+        pendingForceEvaluation = nil
+        forceEvaluationSuspendedByInvalidTouch = false
+        maxTouchDisplacement = 0
+        consecutiveInvalidTouchFrames = 0
+        pretrackingInvalidTouchFrames = 0
+        activeTouchSessionID = nil
+        pendingForceClickSessionID = nil
+        shouldReplayPendingPrimaryClick = false
         isActivelyScrollingInZone = false
+        isEvaluatingScrollCandidate = false
     }
 
     // MARK: - Scroll Intent Detection
@@ -701,96 +837,386 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         case needMoreFrames // Too little movement, need more data
     }
 
-    /// Evaluate whether the user intends to scroll based on direction coherence + on-axis velocity
-    private func evaluateScrollIntent() -> ScrollIntentResult {
-        guard activationDeltas.count >= 1 else { return .needMoreFrames }
+    private func scrollActivationHasExpired(at _: Double) -> Bool {
+        guard isScrollActivationPending else { return false }
+        // A force-enabled corner may legitimately sit under the finger for most
+        // of its one-second press window. Bounded tremor must not cancel the
+        // action merely because the sensor produced 24 tiny samples.
+        if isActiveForceCandidateCorner(activationOriginalZone),
+           maxTouchDisplacement < Self.cornerMaxMovementBeforeForce {
+            return false
+        }
+        return activationDeltas.count >= activationSafetyMaxSamples
+    }
 
-        // Use deltas (which already skip the noisy first frame) for direction analysis
-        var totalRawDx: CGFloat = 0
-        var totalRawDy: CGFloat = 0
-        for d in activationDeltas {
-            totalRawDx += abs(d.x)
-            totalRawDy += abs(d.y)
+    private func scrollActivationEvidenceHasGoneStale(at now: Double) -> Bool {
+        guard isScrollActivationPending,
+              let activationLastEvidenceUptime else {
+            return false
         }
 
-        // --- Corner zone: promote to adjacent scroll zone based on movement ---
-        // When a touch starts in a corner, we don't know if the user wants a
-        // corner tap or a scroll. If they move enough, determine the dominant
-        // direction and promote to the appropriate *adjacent* edge scroll zone.
-        //
-        // Key insight: corners sit at the intersection of two edges. We should
-        // only promote to an edge that is:
-        //   1. Physically adjacent to the corner
-        //   2. Actually configured for scrolling
-        // E.g., bottom-left corner is adjacent to bottomEdge and leftEdge.
-        //       Promoting to rightEdge would be nonsensical.
-        if isCornerZone(currentZone) {
-            let totalMovement = totalRawDx + totalRawDy
-            if totalMovement < cornerPromotionMinMovement {
-                return .needMoreFrames
+        return max(0, now - activationLastEvidenceUptime)
+            >= activationEvidenceGapDeadline
+    }
+
+    private func expireCornerForceWindowIfNeeded(
+        at now: Double,
+        activationTimestamp: Double
+    ) {
+        guard isActiveForceCandidateCorner(activationOriginalZone),
+              max(0, now - touchStartUptime) >= forcePressMaxDuration,
+              !hasTimelyPendingForceEvaluation() else {
+            return
+        }
+
+        cornerForceWindowExpired = true
+        forceGestureDisqualified = true
+        pendingForceEvaluation = nil
+        // The evidence accumulated while force had priority is mostly hold
+        // tremor. Once that window closes, begin a clean scroll-only decision
+        // with the current physical frame instead of carrying the old foldback
+        // path into the 24-sample safety deadline.
+        restartScrollActivationEvidence(at: activationTimestamp)
+        LogManager.shared.log(
+            "Corner force window expired; restarted as scroll-only candidate"
+        )
+    }
+
+    /// A pause invalidates old evidence but not the user's entire contact. The
+    /// next movement starts a fresh two-sample decision, so tremor followed by a
+    /// deliberate slow scroll is not permanently demoted to cursor movement.
+    private func restartScrollActivationEvidence(at timestamp: Double) {
+        activationDeltas.removeAll()
+        activationSampleTimestamps.removeAll()
+        activationDeltaAccumulator = .zero
+        activationWindowStartTimestamp = timestamp
+        activationLastEvidenceUptime = nil
+        scrollIntentGate = makeScrollIntentGate(for: activationOriginalZone)
+        LogManager.shared.log("Scroll evidence window restarted after pause")
+    }
+
+    private func expireScrollActivation() {
+        let isForceCorner = isActiveForceCandidateCorner(activationOriginalZone)
+        if isForceCorner, !hasTimelyPendingForceEvaluation() {
+            forceGestureDisqualified = true
+            pendingForceEvaluation = nil
+        }
+
+        isScrollActivationPending = false
+        activationDeltas.removeAll()
+        activationSampleTimestamps.removeAll()
+        activationDeltaAccumulator = .zero
+        activationWindowStartTimestamp = 0
+        isActivelyScrollingInZone = false
+        isEvaluatingScrollCandidate = false
+        gestureOutcome = "scroll-timeout"
+
+        if isForceCorner {
+            currentZone = activationOriginalZone
+            LogManager.shared.log("Scroll timeout → restored \(activationOriginalZone)")
+        } else {
+            currentZone = .center
+            LogManager.shared.log("Scroll timeout → center")
+        }
+    }
+
+    private func applyScrollIntentResult(
+        _ result: ScrollIntentResult,
+        eventUptime: Double
+    ) {
+        switch result {
+        case .activated:
+            forceGestureDisqualified = true
+            pendingForceEvaluation = nil
+            shouldReplayPendingPrimaryClick = false
+            isScrollActivationPending = false
+            isActivelyScrollingInZone = true
+            isEvaluatingScrollCandidate = false
+            gestureOutcome = "scroll:\(currentZone)"
+
+            let acceptedDeltas = acceptedActivationDeltasForFlush()
+            seedVelocityHistoryFromActivation(acceptedDeltas: acceptedDeltas)
+            for buffered in acceptedDeltas {
+                handleScroll(delta: buffered, zone: currentZone)
             }
+            ensureActivatedScrollEmitsAtLeastOnePixel(
+                acceptedDeltas: acceptedDeltas,
+                zone: currentZone
+            )
+            activationDeltas.removeAll()
+            activationSampleTimestamps.removeAll()
+            LogManager.shared.log("Scroll activated: \(currentZone)")
 
-            // Determine which adjacent edges are available
-            let adjacentHorizontal: ScrollZone?
-            let adjacentVertical: ScrollZone?
-            let horizontalScrollLocked = isHorizontalScrollTemporarilyLocked()
-
-            switch currentZone {
-            case .bottomLeftCorner:
-                adjacentHorizontal = (!horizontalScrollLocked && horizontalPosition == .bottom) ? .bottomEdge : nil
-                adjacentVertical = (verticalEdgeMode == .left || verticalEdgeMode == .both) ? .leftEdge : nil
-            case .bottomRightCorner:
-                adjacentHorizontal = (!horizontalScrollLocked && horizontalPosition == .bottom) ? .bottomEdge : nil
-                adjacentVertical = (verticalEdgeMode == .right || verticalEdgeMode == .both) ? .rightEdge : nil
-            case .topLeftCorner:
-                adjacentHorizontal = (!horizontalScrollLocked && horizontalPosition == .top) ? .topEdge : nil
-                adjacentVertical = (verticalEdgeMode == .left || verticalEdgeMode == .both) ? .leftEdge : nil
-            case .topRightCorner:
-                adjacentHorizontal = (!horizontalScrollLocked && horizontalPosition == .top) ? .topEdge : nil
-                adjacentVertical = (verticalEdgeMode == .right || verticalEdgeMode == .both) ? .rightEdge : nil
-            default:
-                adjacentHorizontal = nil
-                adjacentVertical = nil
+        case .rejected:
+            let isForceCorner = isActiveForceCandidateCorner(
+                activationOriginalZone
+            )
+            if isForceCorner {
+                forceGestureDisqualified = true
+                pendingForceEvaluation = nil
             }
-
-            // Determine dominant direction with aspect ratio compensation
-            let compensatedDx = totalRawDx * 1.6
-            let promotedZone: ScrollZone
-
-            if let h = adjacentHorizontal, let v = adjacentVertical {
-                // Both adjacent edges are active — pick based on direction,
-                // but bias toward horizontal for bottom/top corners since
-                // sensor noise at the physical edge inflates Y readings
-                let isBottom = (currentZone == .bottomLeftCorner || currentZone == .bottomRightCorner)
-                let isTop = (currentZone == .topLeftCorner || currentZone == .topRightCorner)
-                let horizontalBias: CGFloat = (isBottom || isTop) ? 1.5 : 1.0
-
-                if compensatedDx * horizontalBias >= totalRawDy {
-                    promotedZone = h
-                } else {
-                    promotedZone = v
-                }
-            } else if let h = adjacentHorizontal {
-                // Only horizontal edge is available — promote there
-                promotedZone = h
-            } else if let v = adjacentVertical {
-                // Only vertical edge is available — promote there
-                promotedZone = v
+            isScrollActivationPending = false
+            activationDeltas.removeAll()
+            activationSampleTimestamps.removeAll()
+            isActivelyScrollingInZone = false
+            isEvaluatingScrollCandidate = false
+            gestureOutcome = "scroll-rejected"
+            if isForceCorner {
+                currentZone = activationOriginalZone
+                LogManager.shared.log(
+                    "Scroll rejected → restored \(activationOriginalZone) (corner tap still possible)"
+                )
             } else {
-                // No adjacent edge is configured — reject
-                return .rejected
+                currentZone = .center
+                LogManager.shared.log("Scroll rejected → center (cursor movement)")
             }
 
-            currentZone = promotedZone
-            LogManager.shared.log("Corner promoted → \(promotedZone)")
+        case .needMoreFrames:
+            if scrollActivationHasExpired(at: eventUptime) {
+                expireScrollActivation()
+            }
+        }
+    }
 
-            activationConfidence = 0
-            // Fall through to normal scroll evaluation with the new zone
+    private func finalizeScrollActivationOnRelease(
+        timestamp: Double,
+        eventUptime: Double
+    ) {
+        guard isScrollActivationPending,
+              physicalDeltaMagnitude(activationDeltaAccumulator) > 0 else {
+            return
         }
 
-        // Normal edge scrolling activates from movement. Force is reserved for
-        // tap-style actions such as middle click and corner triggers.
-        return .activated
+        let tail = ScrollIntentGate.Sample(
+            dx: activationDeltaAccumulator.x,
+            dy: activationDeltaAccumulator.y
+        )
+        guard ScrollIntentGate.releaseTailCanConfirm(
+            tail,
+            minimumPhysicalMagnitude: minimumActivationSampleDistance
+        ) else {
+            return
+        }
+
+        activationDeltas.append(activationDeltaAccumulator)
+        activationSampleTimestamps.append(timestamp)
+        activationDeltaAccumulator = .zero
+        activationLastEvidenceUptime = eventUptime
+        applyScrollIntentResult(
+            evaluateScrollIntent(),
+            eventUptime: eventUptime
+        )
+    }
+
+    private func seedVelocityHistoryFromActivation(
+        acceptedDeltas: [CGPoint]
+    ) {
+        velocityHistory.removeAll()
+        let samples = acceptedDeltas.map {
+            ScrollIntentGate.Sample(dx: $0.x, dy: $0.y)
+        }
+        let confirmedVelocities = ScrollIntentGate.confirmedVelocitySamples(
+            samples: samples,
+            timestamps: activationSampleTimestamps,
+            windowStartTimestamp: activationWindowStartTimestamp
+        )
+        for velocity in confirmedVelocities.suffix(velocityHistorySize) {
+            velocityHistory.append((
+                vx: velocity.vx,
+                vy: velocity.vy,
+                time: velocity.time
+            ))
+        }
+    }
+
+    /// Evaluate scroll intent from cumulative displacement and direction. A
+    /// candidate is not an activation until the pure gate says so.
+    private func evaluateScrollIntent() -> ScrollIntentResult {
+        guard let latestDelta = activationDeltas.last else { return .needMoreFrames }
+
+        if isCornerZone(currentZone) {
+            let adjacent = adjacentScrollZones(for: currentZone)
+            var availableAxes: Set<ScrollIntentGate.Axis> = []
+            if adjacent.horizontal != nil { availableAxes.insert(.horizontal) }
+            if adjacent.vertical != nil { availableAxes.insert(.vertical) }
+
+            let samples = cornerIntentSamples()
+            // One callback can still be a centroid-settling jump. Even after
+            // movement crosses the force cap, wait for a second physical sample
+            // before committing a corner to scroll or rejection.
+            guard samples.count >= 2 else { return .needMoreFrames }
+            let resolution = ScrollIntentGate.resolveCorner(
+                samples: samples,
+                availableAxes: availableAxes,
+                forceCandidateMaxExcursion: isActiveForceCandidateCorner(currentZone)
+                    ? Self.cornerMaxMovementBeforeForce
+                    : 0,
+                measuredMaximumExcursion: maxTouchDisplacement
+            )
+
+            switch resolution {
+            case .preserveForceCandidate:
+                return .needMoreFrames
+
+            case .awaitMoreScrollEvidence:
+                return .needMoreFrames
+
+            case let .reject(reason):
+                if reason == .movementTargetsUnavailableAxis,
+                   availableAxes.count == 1,
+                   let availableAxis = availableAxes.first,
+                   ScrollIntentGate.shouldAwaitUnavailableAxisRejection(
+                       rawSamples: activationDeltas.map {
+                           ScrollIntentGate.Sample(dx: $0.x, dy: $0.y)
+                       },
+                       availableAxis: availableAxis,
+                       maximumSampleCount: activationSafetyMaxSamples
+                   ) {
+                    return .needMoreFrames
+                }
+                LogManager.shared.log("Corner scroll rejected: \(reason)")
+                return .rejected
+
+            case let .activate(axis):
+                if activationDeltas.count < 3,
+                   cornerInitialSampleContradicts(axis: axis) {
+                    return .needMoreFrames
+                }
+                guard let promotedZone = axis == .horizontal ? adjacent.horizontal : adjacent.vertical else {
+                    return .rejected
+                }
+
+                currentZone = promotedZone
+                scrollIntentGate = nil
+                LogManager.shared.log("Corner direction committed → \(promotedZone)")
+                return .activated
+            }
+        }
+
+        guard var gate = scrollIntentGate ?? makeScrollIntentGate(for: currentZone) else {
+            return .rejected
+        }
+
+        let decision = gate.observe(deltaX: latestDelta.x, deltaY: latestDelta.y)
+        scrollIntentGate = gate
+
+        if decision != .pending {
+            LogManager.shared.log(String(
+                format: "Scroll intent %@ samples=%d net=(%.4f,%.4f) path=(%.4f,%.4f)",
+                String(describing: decision),
+                gate.metrics.sampleCount,
+                gate.metrics.rawNetX,
+                gate.metrics.rawNetY,
+                gate.metrics.normalizedPathX,
+                gate.metrics.pathY
+            ))
+        }
+
+        return scrollIntentResult(from: decision)
+    }
+
+    private func cornerIntentSamples() -> [ScrollIntentGate.Sample] {
+        activationDeltas.enumerated().map { index, delta in
+            let sample = ScrollIntentGate.Sample(dx: delta.x, dy: delta.y)
+            return index == 0
+                ? ScrollIntentGate.winsorizedInitialSample(sample)
+                : sample
+        }
+    }
+
+    private func cornerInitialSampleContradicts(
+        axis: ScrollIntentGate.Axis
+    ) -> Bool {
+        guard let first = activationDeltas.first else { return false }
+        let normalizedX = abs(
+            first.x * ScrollIntentGate.horizontalAspectCompensation
+        )
+        let vertical = abs(first.y)
+        guard hypot(normalizedX, vertical)
+                > ScrollIntentGate.initialSampleMaximumPhysicalMagnitude else {
+            return false
+        }
+
+        switch axis {
+        case .horizontal:
+            return vertical > normalizedX
+        case .vertical:
+            return normalizedX > vertical
+        }
+    }
+
+    private func acceptedActivationDeltasForFlush() -> [CGPoint] {
+        if let scrollIntentGate,
+           !scrollIntentGate.acceptedSamples.isEmpty {
+            return scrollIntentGate.acceptedSamples.map {
+                CGPoint(x: $0.dx, y: $0.dy)
+            }
+        }
+
+        return cornerIntentSamples().map {
+            CGPoint(x: $0.dx, y: $0.dy)
+        }
+    }
+
+    private func makeScrollIntentGate(for zone: ScrollZone) -> ScrollIntentGate? {
+        guard let axis = scrollAxis(for: zone) else { return nil }
+        return ScrollIntentGate(
+            axis: axis,
+            configuration: .init(maxSamples: activationSafetyMaxSamples)
+        )
+    }
+
+    private func scrollAxis(for zone: ScrollZone) -> ScrollIntentGate.Axis? {
+        switch zone {
+        case .bottomEdge, .topEdge:
+            return .horizontal
+        case .leftEdge, .rightEdge:
+            return .vertical
+        default:
+            return nil
+        }
+    }
+
+    private func scrollIntentResult(from decision: ScrollIntentGate.Decision) -> ScrollIntentResult {
+        switch decision {
+        case .pending:
+            return .needMoreFrames
+        case .activate:
+            return .activated
+        case .reject:
+            return .rejected
+        }
+    }
+
+    private func adjacentScrollZones(
+        for corner: ScrollZone
+    ) -> (horizontal: ScrollZone?, vertical: ScrollZone?) {
+        let horizontalScrollLocked = isHorizontalScrollTemporarilyLocked()
+
+        switch corner {
+        case .bottomLeftCorner:
+            return (
+                (!horizontalScrollLocked && horizontalPosition == .bottom) ? .bottomEdge : nil,
+                (verticalEdgeMode == .left || verticalEdgeMode == .both) ? .leftEdge : nil
+            )
+        case .bottomRightCorner:
+            return (
+                (!horizontalScrollLocked && horizontalPosition == .bottom) ? .bottomEdge : nil,
+                (verticalEdgeMode == .right || verticalEdgeMode == .both) ? .rightEdge : nil
+            )
+        case .topLeftCorner:
+            return (
+                (!horizontalScrollLocked && horizontalPosition == .top) ? .topEdge : nil,
+                (verticalEdgeMode == .left || verticalEdgeMode == .both) ? .leftEdge : nil
+            )
+        case .topRightCorner:
+            return (
+                (!horizontalScrollLocked && horizontalPosition == .top) ? .topEdge : nil,
+                (verticalEdgeMode == .right || verticalEdgeMode == .both) ? .rightEdge : nil
+            )
+        default:
+            return (nil, nil)
+        }
     }
 
     /// Check if a zone is a horizontal scroll zone
@@ -804,208 +1230,12 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     }
 
     private func isHorizontalScrollTemporarilyLocked() -> Bool {
-        DispatchTime.now().uptimeNanoseconds < horizontalScrollLockUntilUptimeNs
+        horizontalScrollLockedUntilLift
     }
 
     private func engageHorizontalScrollLockAfterRightClick() {
-        let now = DispatchTime.now().uptimeNanoseconds
-        let durationNs = UInt64(rightClickHorizontalScrollLockDuration * 1_000_000_000)
-        horizontalScrollLockUntilUptimeNs = max(now, horizontalScrollLockUntilUptimeNs) + durationNs
-        LogManager.shared.log(String(format: "Horizontal scroll locked for %.0fms after right click",
-                                     rightClickHorizontalScrollLockDuration * 1000))
-    }
-
-    // MARK: - Activation Helpers
-
-    /// Categorize a scroll zone as horizontal, vertical, or none
-    private func zoneCategory(for zone: ScrollZone) -> ZoneCategory {
-        switch zone {
-        case .bottomEdge, .topEdge:
-            return .horizontal
-        case .leftEdge, .rightEdge:
-            return .vertical
-        default:
-            return .none
-        }
-    }
-
-    /// Record a successful scroll activation.
-    private func recordSuccessfulActivation() {
-        activationConfidence = 1.0
-        startScrollSessionTracking()
-    }
-
-    // MARK: - False Activation Detection Methods
-
-    /// Start tracking a new scroll session when activation succeeds
-    private func startScrollSessionTracking() {
-        guard isScrollZone(currentZone) else { return }
-
-        // Calculate activation metrics
-        let totalDx = activationDeltas.reduce(0) { $0 + abs($1.x) } * 1.6
-        let totalDy = activationDeltas.reduce(0) { $0 + abs($1.y) }
-        let total = totalDx + totalDy
-
-        let onAxisRatio: CGFloat
-        let offAxisSpeed: CGFloat
-        let onAxisSpeed: CGFloat
-
-        if isHorizontalZone(currentZone) {
-            onAxisRatio = total > 0 ? totalDx / total : 0.5
-            onAxisSpeed = abs(velocityHistory.last?.vx ?? 0)
-            offAxisSpeed = abs(velocityHistory.last?.vy ?? 0)
-        } else {
-            onAxisRatio = total > 0 ? totalDy / total : 0.5
-            onAxisSpeed = abs(velocityHistory.last?.vy ?? 0)
-            offAxisSpeed = abs(velocityHistory.last?.vx ?? 0)
-        }
-
-        let activationData = ScrollSessionRecord.ActivationData(
-            onAxisRatio: onAxisRatio,
-            offAxisSpeed: offAxisSpeed,
-            onAxisSpeed: onAxisSpeed,
-            density: activationDensities.last ?? 0.05,
-            confidence: activationConfidence
-        )
-
-        currentScrollSession = ScrollSessionRecord(
-            zone: currentZone,
-            startTime: CACurrentMediaTime(),
-            activationData: activationData
-        )
-
-        LogManager.shared.log(String(format: "Started tracking scroll session in %@ (onAxisRatio=%.3f)",
-            String(describing: currentZone), onAxisRatio))
-    }
-
-    /// Update the current scroll session with movement data
-    func updateScrollSession(delta: CGPoint) {
-        guard var session = currentScrollSession else { return }
-
-        let distance = hypot(delta.x, delta.y)
-        session.totalDistance += distance
-
-        // Track max velocity
-        let currentVel = hypot(velocityHistory.last?.vx ?? 0, velocityHistory.last?.vy ?? 0)
-        session.maxVelocity = max(session.maxVelocity, currentVel)
-
-        // Track direction changes (simplified)
-        if activationDeltas.count >= 2 {
-            let prevDelta = activationDeltas[activationDeltas.count - 2]
-            let dotProduct = (delta.x * prevDelta.x) + (delta.y * prevDelta.y)
-            if dotProduct < 0 {
-                session.directionChanges += 1
-            }
-        }
-
-        currentScrollSession = session
-    }
-
-    /// Finalize the current scroll session and learn from it
-    private func finalizeScrollSession(wasCancelled: Bool = false) {
-        guard var session = currentScrollSession else { return }
-
-        session.endTime = CACurrentMediaTime()
-        session.wasCancelled = wasCancelled
-
-        // Add to history
-        scrollSessionHistory.append(session)
-        if scrollSessionHistory.count > maxSessionHistorySize {
-            scrollSessionHistory.removeFirst()
-        }
-
-        // Learn from this session
-        learnFromScrollSession(session)
-
-        // Log results
-        if session.isFalseActivation {
-            LogManager.shared.log(String(format: "⚠️ False activation detected: zone=%@, duration=%.3fs, distance=%.4f",
-                String(describing: session.zone), session.duration, session.totalDistance))
-        } else {
-            LogManager.shared.log(String(format: "✓ Valid scroll session: zone=%@, duration=%.3fs, distance=%.4f",
-                String(describing: session.zone), session.duration, session.totalDistance))
-        }
-
-        currentScrollSession = nil
-    }
-
-    /// Learn from scroll session history to adjust thresholds
-    private func learnFromScrollSession(_ session: ScrollSessionRecord) {
-        // Get or create threshold for this zone
-        var threshold = falseActivationThresholds[session.zone] ?? FalseActivationThreshold()
-
-        // Update threshold based on session data
-        threshold.learnFromFalseActivation(session)
-
-        // Store updated threshold
-        falseActivationThresholds[session.zone] = threshold
-
-        // Log learning progress periodically
-        if scrollSessionHistory.count % 10 == 0 {
-            LogManager.shared.log(String(format: "📊 Learned thresholds for %@: minDuration=%.3f, minDistance=%.4f, minOnAxisRatio=%.3f (samples=%d)",
-                String(describing: session.zone), threshold.minDuration, threshold.minDistance, threshold.minOnAxisRatio, threshold.sampleCount))
-        }
-    }
-
-    /// Check if current activation data might be a false activation based on learned thresholds
-    func isLikelyFalseActivation() -> Bool {
-        guard let session = currentScrollSession else { return false }
-        guard let threshold = falseActivationThresholds[session.zone] else { return false }
-
-        // Quick check based on learned thresholds
-        if session.activationData.onAxisRatio < threshold.minOnAxisRatio {
-            return true
-        }
-
-        return false
-    }
-
-    /// Record a missed scroll (rejection or timeout)
-    private func recordActivationFailure() {
-    }
-
-    /// Check if a new touch is a retry after a recent miss, and update retry bonus
-    private func checkForRetry(zone: ScrollZone) {
-        let cat = zoneCategory(for: zone)
-        guard cat != .none else { return }
-
-        if cat == lastMissZoneCategory && lastMissTimestamp > 0 {
-            let elapsed = CACurrentMediaTime() - lastMissTimestamp
-            if elapsed < 2.0 {
-                // This touch is a retry — update bonus
-                if cat == .horizontal {
-                    retryCountH += 1
-                    let total = retryCountH + missCountH
-                    if total >= 5 {
-                        let rate = CGFloat(retryCountH) / CGFloat(total)
-                        if rate > 0.30 {
-                            retryBonusH = min(rate * 0.10, 0.08)
-                            LogManager.shared.log(String(format: "Retry bonus updated: H=%.4f (rate=%.2f, retries=%d, misses=%d)",
-                                retryBonusH, rate, retryCountH, missCountH))
-                        }
-                    }
-                } else {
-                    retryCountV += 1
-                    let total = retryCountV + missCountV
-                    if total >= 5 {
-                        let rate = CGFloat(retryCountV) / CGFloat(total)
-                        if rate > 0.30 {
-                            retryBonusV = min(rate * 0.10, 0.08)
-                            LogManager.shared.log(String(format: "Retry bonus updated: V=%.4f (rate=%.2f, retries=%d, misses=%d)",
-                                retryBonusV, rate, retryCountV, missCountV))
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: - Adaptive State Persistence
-
-    func saveAdaptiveState() {
-    }
-
-    func loadAdaptiveState() {
+        horizontalScrollLockedUntilLift = true
+        LogManager.shared.log("Horizontal scroll locked until the right-click contact lifts")
     }
 
     /// Check if a zone is a scroll zone (edges that produce scroll events)
@@ -1020,32 +1250,92 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
     // MARK: - Concurrent Touch Handling
 
+    func acceptedPreviousFingerCount(
+        deviceID: Int,
+        contactGeneration: UInt64,
+        touchCount: Int,
+        devicePreviousFingerCount: Int,
+        allowClaimNewContact: Bool = true,
+        eventTimestamp: Double? = nil
+    ) -> Int? {
+        let isClaimingNewOwnership = touchDeviceArbitrationGate.ownerContact == nil
+            && touchCount > 0
+        let contact = TouchDeviceArbitrationGate.Contact(
+            deviceID: deviceID,
+            generation: contactGeneration
+        )
+        let owner = touchDeviceArbitrationGate.ownerContact
+        // The callback sequencer already orders ordinary cross-device overlap.
+        // While another owner is still present, omit the timestamp so the gate
+        // fails closed instead of creating a deferred claim that this hot path
+        // cannot replay. Once owner is nil, the timestamp still blocks a truly
+        // overlapping start that arrived outside the bounded reorder window.
+        let arbitrationTimestamp = touchCount == 0
+            || owner == nil
+            || owner == contact
+            ? eventTimestamp
+            : nil
+        let decision = touchDeviceArbitrationGate.processTouchFrame(
+            deviceID: deviceID,
+            contactGeneration: contactGeneration,
+            touchCount: touchCount,
+            allowClaim: allowClaimNewContact,
+            eventTimestamp: arbitrationTimestamp
+        )
+        guard decision == .accept else { return nil }
+        return isClaimingNewOwnership ? 0 : devicePreviousFingerCount
+    }
+
+    func shouldAcceptForceSample(
+        deviceID: Int,
+        contactGeneration: UInt64
+    ) -> Bool {
+        touchDeviceArbitrationGate.processForce(
+            deviceID: deviceID,
+            contactGeneration: contactGeneration
+        ) == .accept
+    }
+
     func handleFingerCountTransition(from oldCount: Int, to newCount: Int) {
-        // Single → Multi: Cancel any active scrolling
-        if oldCount == 1 && newCount > 1 {
-            cancelActiveScrolling()
+        // Once a device enters a multi-finger gesture, do not reinterpret the
+        // remaining finger as a fresh TrackPal gesture. A real zero-touch frame
+        // is the only reset boundary.
+        if newCount > 1 {
+            if oldCount == 1 && isTracking {
+                cancelActiveScrolling(reason: "multi-finger")
+            }
+            requiresAllFingersLifted = true
             currentGestureMode = .multiFinger
             LogManager.shared.log("Single→Multi transition, cancelling scroll")
         }
-        // Multi → Single: Record time for debounce
-        else if oldCount > 1 && newCount == 1 {
-            multiToSingleTransitionTime = CACurrentMediaTime()
-            currentGestureMode = .singleFinger
-            LogManager.shared.log("Multi→Single transition, debounce active")
-        }
-        // Any → Zero: Reset to idle
         else if newCount == 0 {
             currentGestureMode = .idle
+            requiresAllFingersLifted = false
         }
-        // Zero → One: Start single finger mode
-        else if oldCount == 0 && newCount == 1 {
+        else if newCount == 1 && !requiresAllFingersLifted {
             currentGestureMode = .singleFinger
+        } else if newCount == 1 {
+            currentGestureMode = .multiFinger
+            LogManager.shared.log("Multi→Single transition ignored until all fingers lift")
         }
 
         activeFingerCount = newCount
     }
 
-    private func cancelActiveScrolling() {
+    func completeZeroTouchBoundary() {
+        isContactQuarantinedUntilLift = false
+        pretrackingInvalidTouchFrames = 0
+        consecutiveInvalidTouchFrames = 0
+        forceEvaluationSuspendedByInvalidTouch = false
+    }
+
+    private func cancelActiveScrolling(reason: String = "cancelled") {
+        gestureOutcome = reason
+        shouldReplayPendingPrimaryClick = false
+        forceGestureDisqualified = true
+        pendingForceEvaluation = nil
+        resolvePendingPrimaryClick(replayCapturedClick: false)
+
         // Send scroll phase ended if we had started tracking
         if hasEmittedScrollBegan {
             postScrollEvent(deltaX: 0, deltaY: 0, scrollPhase: 4, momentumPhase: 0)
@@ -1055,28 +1345,13 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         }
         isActivelyScrollingInZone = false
 
-        // Mark session as cancelled before resetting
-        if currentScrollSession != nil {
-            finalizeScrollSession(wasCancelled: true)
-        }
-
         resetTracking()
     }
 
     func shouldProcessSingleFingerTouch() -> Bool {
-        // Block if in multi-finger mode (system gesture active)
-        if currentGestureMode == .multiFinger { return false }
-
-        // Allow if idle (fresh start) or singleFinger mode
-        // Check debounce only after multi→single transition
-        if currentGestureMode == .singleFinger && multiToSingleTransitionTime > 0 {
-            let timeSinceTransition = CACurrentMediaTime() - multiToSingleTransitionTime
-            if timeSinceTransition < multiToSingleDebounce {
-                return false
-            }
-        }
-
-        return true
+        activeFingerCount == 1
+            && currentGestureMode == .singleFinger
+            && !requiresAllFingersLifted
     }
 
     // MARK: - Touch Filtering (Scroll2-style)
@@ -1088,37 +1363,143 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     }
 
     /// Process touch with filtering applied. Called from the callback on main thread.
-    func processFilteredTouch(x: Float, y: Float, state: Int32, timestamp: Double,
-                              density: Float, majorAxis: Float, minorAxis: Float) {
-        // Skip filtering for lift-off states (6=lifting, 7=released)
-        // Density drops to 0 on lift-off, which would falsely trigger light touch filter
-        // We must let lift-off reach processTouch for proper cleanup and inertia triggering
+    func processFilteredTouch(
+        x: Float,
+        y: Float,
+        state: Int32,
+        timestamp: Double,
+        eventUptime: Double,
+        density: Float,
+        majorAxis: Float,
+        minorAxis: Float
+    ) {
+        // Density drops to 0 while lifting, so release frames bypass filtering.
+        // Quarantine is cleared only at the real released/zero-touch boundary.
         if state >= 6 {
-            processTouch(x: x, y: y, state: state, timestamp: timestamp)
+            if isTracking {
+                processTouch(
+                    x: x,
+                    y: y,
+                    state: state,
+                    timestamp: timestamp,
+                    eventUptime: eventUptime
+                )
+            }
+            if state >= 7 {
+                isContactQuarantinedUntilLift = false
+                consecutiveInvalidTouchFrames = 0
+                pretrackingInvalidTouchFrames = 0
+                forceEvaluationSuspendedByInvalidTouch = false
+            }
             return
         }
+
+        guard !isContactQuarantinedUntilLift else { return }
 
         let result = classifyTouchValues(density: density, majorAxis: majorAxis, minorAxis: minorAxis)
 
         switch result {
         case .valid:
-            currentTouchDensity = density
-            processTouch(x: x, y: y, state: state, timestamp: timestamp)
+            consecutiveInvalidTouchFrames = 0
+            pretrackingInvalidTouchFrames = 0
+            forceEvaluationSuspendedByInvalidTouch = false
+            processTouch(
+                x: x,
+                y: y,
+                state: state,
+                timestamp: timestamp,
+                eventUptime: eventUptime
+            )
 
         case .tooLight:
             filteredLightTouchCount += 1
-            if isTracking {
-                LogManager.shared.log(String(format: "Light touch filtered (density=%.3f) [count=%d]", density, filteredLightTouchCount))
-                resetTracking()
-            }
+            handleInvalidTouchFrame(
+                x: x,
+                y: y,
+                timestamp: timestamp,
+                reason: "filter-light",
+                detail: String(format: "density=%.3f", density)
+            )
 
         case .tooLarge:
             filteredLargeTouchCount += 1
-            if isTracking {
-                LogManager.shared.log(String(format: "Large touch filtered (major=%.3f, minor=%.3f) [count=%d]", majorAxis, minorAxis, filteredLargeTouchCount))
-                resetTracking()
-            }
+            handleInvalidTouchFrame(
+                x: x,
+                y: y,
+                timestamp: timestamp,
+                reason: "filter-large",
+                detail: String(format: "major=%.3f minor=%.3f", majorAxis, minorAxis)
+            )
         }
+    }
+
+    private func handleInvalidTouchFrame(
+        x: Float,
+        y: Float,
+        timestamp: Double,
+        reason: String,
+        detail: String
+    ) {
+        if isTracking {
+            recordInvalidTouchTrajectory(x: x, y: y, timestamp: timestamp)
+            forceEvaluationSuspendedByInvalidTouch = true
+            consecutiveInvalidTouchFrames += 1
+
+            guard consecutiveInvalidTouchFrames >= invalidTouchFramesBeforeCancellation else {
+                return
+            }
+
+            LogManager.shared.log(
+                "Touch cancelled after \(consecutiveInvalidTouchFrames) consecutive invalid frames (\(detail))"
+            )
+            isContactQuarantinedUntilLift = true
+            cancelActiveScrolling(reason: reason)
+            return
+        }
+
+        // A normal finger can spend several scan frames below the density
+        // threshold while settling onto the pad. Before tracking starts, wait
+        // for it to become valid; only palm-sized contacts earn quarantine.
+        if reason == "filter-light" {
+            // Palm quarantine requires consecutive large-contact evidence.
+            // A light/settling frame breaks that sequence.
+            pretrackingInvalidTouchFrames = 0
+            return
+        }
+
+        pretrackingInvalidTouchFrames += 1
+        guard pretrackingInvalidTouchFrames >= invalidTouchFramesBeforeCancellation else {
+            return
+        }
+
+        isContactQuarantinedUntilLift = true
+        LogManager.shared.log(
+            "Contact quarantined before activation after \(pretrackingInvalidTouchFrames) invalid frames (\(detail))"
+        )
+    }
+
+    private func recordInvalidTouchTrajectory(x: Float, y: Float, timestamp: Double) {
+        let position = CGPoint(x: CGFloat(x), y: CGFloat(y))
+        let delta = CGPoint(
+            x: position.x - lastTouchPosition.x,
+            y: position.y - lastTouchPosition.y
+        )
+
+        maxTouchDisplacement = max(
+            maxTouchDisplacement,
+            physicalTouchDistance(from: touchStartPosition, to: position)
+        )
+        gesturePathX += abs(delta.x)
+        gesturePathY += abs(delta.y)
+        gestureNetX += delta.x
+        gestureNetY += delta.y
+        lastTouchPosition = position
+        lastTouchTime = timestamp
+        activationDeltaAccumulator = .zero
+
+        // Invalid samples are useful as trajectory boundaries but must never
+        // contribute momentum or a single huge recovery delta.
+        velocityHistory.removeAll()
     }
 
     /// Classify touch using extracted values (thread-safe, no MTTouch struct needed)
@@ -1143,31 +1524,58 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         return .valid
     }
 
-    func processForceCentroid(x: Float, y: Float, force: Float) {
+    private func physicalTouchDistance(from start: CGPoint, to end: CGPoint) -> CGFloat {
+        physicalDeltaMagnitude(
+            CGPoint(x: end.x - start.x, y: end.y - start.y)
+        )
+    }
+
+    private func physicalDeltaMagnitude(_ delta: CGPoint) -> CGFloat {
+        hypot(
+            delta.x * ScrollIntentGate.horizontalAspectCompensation,
+            delta.y
+        )
+    }
+
+    func processForceCentroid(
+        x _: Float,
+        y _: Float,
+        force: Float,
+        sampleTimestamp: Double,
+        sampleUptime: Double
+    ) {
         guard isTracking else { return }
 
-        let forcePosition = CGPoint(x: CGFloat(x), y: CGFloat(y))
+        // Force centroid samples are delivered on a separate event stream from
+        // touch frames. Use the touch trajectory for zone/movement evidence;
+        // centroid coordinates are diagnostic only and can drift at the edge.
+        forcePressMaxForce = max(forcePressMaxForce, force)
+        if isTouchEnding {
+            guard let touchEndingTimestamp,
+                  sampleTimestamp <= touchEndingTimestamp else {
+                return
+            }
+        }
+        guard !forceGestureDisqualified,
+              !forceEvaluationSuspendedByInvalidTouch else {
+            return
+        }
 
         if currentZone == .middleClick && middleClickEnabled {
-            guard determineZone(forcePosition) == .middleClick else { return }
-            forcePressMaxForce = max(forcePressMaxForce, force)
             if force >= middleClickForcePressThreshold {
-                markForcePressSatisfied(
+                queuePendingForceEvaluation(
+                    target: .middleClick,
                     force: force,
-                    standardThreshold: middleClickForcePressThreshold,
-                    assistedThreshold: middleClickForcePressThreshold,
-                    position: forcePosition,
-                    actionGate: forcePressActionGate,
-                    maxMovementBeforeForce: tapMaxMovement
+                    sampleTimestamp: sampleTimestamp,
+                    sampleUptime: sampleUptime
                 )
             }
             return
         }
 
-        guard isCornerZone(currentZone) else { return }
-        guard let cornerForceRegion = cornerForceRegion(for: forcePosition, in: currentZone) else { return }
+        guard isActiveForceCandidateCorner(currentZone) else { return }
+        guard let cornerForceRegion = cornerForceRegion(for: touchStartPosition, in: currentZone) else { return }
 
-        forcePressMaxForce = max(forcePressMaxForce, force)
         let assistedThreshold: Float
         if cornerForceRegion == .strict {
             assistedThreshold = cornerForceAssistedThreshold
@@ -1176,14 +1584,110 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         }
 
         if force >= assistedThreshold {
-            markForcePressSatisfied(
+            queuePendingForceEvaluation(
+                target: .corner(cornerForceRegion),
                 force: force,
+                sampleTimestamp: sampleTimestamp,
+                sampleUptime: sampleUptime
+            )
+        }
+    }
+
+    private func queuePendingForceEvaluation(
+        target: PendingForceTarget,
+        force: Float,
+        sampleTimestamp: Double,
+        sampleUptime: Double
+    ) {
+        let sample = PendingForceEvaluation(
+            target: target,
+            force: force,
+            sampleTimestamp: sampleTimestamp,
+            sampleUptime: sampleUptime
+        )
+        guard let pending = pendingForceEvaluation else {
+            pendingForceEvaluation = sample
+            return
+        }
+
+        // Preserve one real hardware sample. Combining a later maximum force
+        // with an earlier timestamp invents a press that never existed.
+        if sampleTimestamp < pending.sampleTimestamp
+            || (sampleTimestamp == pending.sampleTimestamp
+                && sampleUptime < pending.sampleUptime) {
+            pendingForceEvaluation = sample
+        }
+    }
+
+    /// When a corner has already moved far enough to be meaningful but still
+    /// lacks a confirming direction sample, do not let force win the same frame.
+    /// The next touch sample (or release) resolves the full trajectory first.
+    private func shouldDeferPendingForceForScrollEvidence() -> Bool {
+        isScrollActivationPending
+            && isActiveForceCandidateCorner(activationOriginalZone)
+            && !activationDeltas.isEmpty
+            && maxTouchDisplacement
+                >= ScrollIntentGate.initialSampleMaximumPhysicalMagnitude
+    }
+
+    private func hasTimelyPendingForceEvaluation() -> Bool {
+        guard let pendingForceEvaluation else { return false }
+        return max(0, pendingForceEvaluation.sampleTimestamp - touchStartTime)
+            < forcePressMaxDuration
+    }
+
+    private func commitPendingForceEvaluation(allowDuringRelease: Bool = false) {
+        guard let pending = pendingForceEvaluation,
+              isTracking,
+              !forceGestureDisqualified,
+              !forceEvaluationSuspendedByInvalidTouch,
+              allowDuringRelease || !isTouchEnding else {
+            return
+        }
+
+        pendingForceEvaluation = nil
+
+        // Revalidate at commit as a final barrier against callback delivery
+        // reordering around state 6. A force sampled after lift cannot become a
+        // corner/middle action merely because it entered the pending queue first.
+        if let touchEndingTimestamp,
+           pending.sampleTimestamp > touchEndingTimestamp {
+            return
+        }
+
+        switch pending.target {
+        case .middleClick:
+            guard currentZone == .middleClick, middleClickEnabled else {
+                forceGestureDisqualified = true
+                return
+            }
+            markForcePressSatisfied(
+                force: pending.force,
+                standardThreshold: middleClickForcePressThreshold,
+                assistedThreshold: middleClickForcePressThreshold,
+                actionGate: forcePressActionGate,
+                maxMovementBeforeForce: tapMaxMovement,
+                sampleTimestamp: pending.sampleTimestamp
+            )
+
+        case let .corner(region):
+            guard isCornerZone(currentZone),
+                  cornerForceRegion(for: touchStartPosition, in: currentZone) == region else {
+                forceGestureDisqualified = true
+                return
+            }
+
+            let assistedThreshold = region == .strict
+                ? cornerForceAssistedThreshold
+                : cornerForcePressThreshold
+            markForcePressSatisfied(
+                force: pending.force,
                 standardThreshold: cornerForcePressThreshold,
                 assistedThreshold: assistedThreshold,
-                position: forcePosition,
                 actionGate: cornerForcePressActionGate,
                 maxMovementBeforeForce: Self.cornerMaxMovementBeforeForce,
-                cornerRegion: cornerForceRegion
+                sampleTimestamp: pending.sampleTimestamp,
+                cornerRegion: region
             )
         }
     }
@@ -1192,9 +1696,9 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         force: Float,
         standardThreshold: Float,
         assistedThreshold: Float,
-        position: CGPoint,
         actionGate: ForcePressActionGate,
         maxMovementBeforeForce: CGFloat,
+        sampleTimestamp: Double,
         cornerRegion: CornerForceRegion? = nil
     ) {
         guard !forcePressSatisfied else { return }
@@ -1203,11 +1707,12 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             force: force,
             standardThreshold: standardThreshold,
             assistedThreshold: assistedThreshold,
-            touchStartPosition: touchStartPosition,
-            forcePosition: position
+            maximumTouchExcursion: maxTouchDisplacement,
+            touchDuration: max(0, sampleTimestamp - touchStartTime)
         )
 
         if case let .reject(reason: reason, movementBeforeForce: movementBeforeForce) = decision {
+            forceGestureDisqualified = true
             if !forcePressThresholdRejected {
                 forcePressThresholdRejected = true
                 LogManager.shared.log(String(format: "Force action rejected: %@ movementBeforeForce=%.4f max=%.4f",
@@ -1222,9 +1727,10 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
         if currentZone == .middleClick && middleClickEnabled {
             forceActionTriggered = true
+            shouldReplayPendingPrimaryClick = false
+            gestureOutcome = "middle-click"
             LogManager.shared.log(String(format: "Middle click press accepted: source=%@ maxForce=%.1f",
                                          forcePressSource, forcePressMaxForce))
-            ScrollEventInterceptor.shared.suppressPrimaryClickForForceAction()
             postMiddleClickEvent()
             return
         }
@@ -1233,8 +1739,9 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
         isScrollActivationPending = false
         activationDeltas.removeAll()
-        activationDensities.removeAll()
+        activationSampleTimestamps.removeAll()
         isActivelyScrollingInZone = false
+        isEvaluatingScrollCandidate = false
 
         let region = cornerRegion?.rawValue ?? "unknown"
         LogManager.shared.log(String(format: "Corner force press accepted: zone=%@ region=%@ source=%@ maxForce=%.1f",
@@ -1244,9 +1751,10 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         guard action != .none else { return }
 
         forceActionTriggered = true
+        shouldReplayPendingPrimaryClick = false
+        gestureOutcome = "corner-action:\(action.rawValue)"
         LogManager.shared.log(String(format: "Corner action accepted: zone=%@ source=%@ maxForce=%.1f",
                                      String(describing: currentZone), forcePressSource, forcePressMaxForce))
-        ScrollEventInterceptor.shared.suppressPrimaryClickForForceAction()
         executeCornerAction(action)
     }
 
@@ -1256,10 +1764,34 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         }
 
         if isCornerZone(zone) {
-            return (cornerActions[zone] ?? .none) != .none
+            return isForceEnabledCorner(zone)
         }
 
         return false
+    }
+
+    private func isForceEnabledCorner(_ zone: ScrollZone) -> Bool {
+        cornerTriggerEnabled
+            && isCornerZone(zone)
+            && (cornerActions[zone] ?? .none) != .none
+    }
+
+    private func isActiveForceCandidateCorner(_ zone: ScrollZone) -> Bool {
+        isForceEnabledCorner(zone) && !cornerForceWindowExpired
+    }
+
+    private func resolvePendingPrimaryClick(
+        replayCapturedClick: Bool,
+        gestureUptime: Double? = nil
+    ) {
+        guard let token = pendingForceClickSessionID else { return }
+        pendingForceClickSessionID = nil
+
+        ScrollEventInterceptor.shared.finishPendingForceGesture(
+            token: token,
+            replayCapturedClick: replayCapturedClick,
+            gestureUptime: gestureUptime
+        )
     }
 
     private func cornerForceRegion(for position: CGPoint, in zone: ScrollZone) -> CornerForceRegion? {
@@ -1284,11 +1816,9 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                     return zone
                 }
             }
-
-            if cornerZone(at: position, includeExpandedCorners: false) != nil {
-                // Unassigned corners preserve native behavior.
-                return .center
-            }
+            // Unassigned corners are not dead zones. They fall through to the
+            // configured edge scroll candidates, where movement intent decides
+            // whether scrolling should actually begin.
         }
 
         // Calculate middle click zone boundaries
@@ -1310,6 +1840,14 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                     return .middleClick
                 }
             }
+        }
+
+        // When vertical and horizontal scroll zones overlap, neither axis gets
+        // static priority. Route the contact through the dual-axis resolver so
+        // movement direction chooses the scroll instead of making one corner
+        // permanently dead for horizontal input.
+        if let overlapCorner = overlappingScrollCorner(at: position) {
+            return overlapCorner
         }
 
         // Check left edge based on mode
@@ -1353,6 +1891,32 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         }
 
         return .center
+    }
+
+    private func overlappingScrollCorner(at position: CGPoint) -> ScrollZone? {
+        guard !isHorizontalScrollTemporarilyLocked() else { return nil }
+
+        let horizontalSide: HorizontalPosition?
+        switch horizontalPosition {
+        case .bottom where position.y < bottomZoneHeight:
+            horizontalSide = .bottom
+        case .top where position.y > (1.0 - bottomZoneHeight):
+            horizontalSide = .top
+        default:
+            horizontalSide = nil
+        }
+        guard let horizontalSide else { return nil }
+
+        let isLeftEnabled = verticalEdgeMode == .left || verticalEdgeMode == .both
+        let isRightEnabled = verticalEdgeMode == .right || verticalEdgeMode == .both
+
+        if isLeftEnabled, position.x < edgeZoneWidth {
+            return horizontalSide == .bottom ? .bottomLeftCorner : .topLeftCorner
+        }
+        if isRightEnabled, position.x > (1.0 - edgeZoneWidth) {
+            return horizontalSide == .bottom ? .bottomRightCorner : .topRightCorner
+        }
+        return nil
     }
 
     private func cornerZone(
@@ -1437,9 +2001,6 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     }
 
     private func handleScroll(delta: CGPoint, zone: ScrollZone) {
-        // Update scroll session tracking
-        updateScrollSession(delta: delta)
-
         // Apply acceleration curve to delta
         let adjustedDelta = applyAccelerationCurve(delta)
 
@@ -1484,8 +2045,58 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         // Determine scroll phase: began on first event, changed on subsequent
         let phase: Int64 = hasEmittedScrollBegan ? 2 : 1  // 1=began, 2=changed
         hasEmittedScrollBegan = true
+        emittedScrollEventCount += 1
+        emittedScrollPixelsX += Int64(scrollX)
+        emittedScrollPixelsY += Int64(scrollY)
 
         postScrollEvent(deltaX: scrollX, deltaY: scrollY, scrollPhase: phase, momentumPhase: 0)
+    }
+
+    /// A gesture that passed the intent gate must produce observable output.
+    /// At 1x sensitivity (or with a nonlinear curve), a threshold-sized buffer
+    /// can still truncate to zero. Emit one signed pixel and clear that axis's
+    /// sub-pixel partial; subtracting the borrowed pixel would create a reverse
+    /// debt that stalls later movement, especially on quadratic/cubic curves.
+    private func ensureActivatedScrollEmitsAtLeastOnePixel(
+        acceptedDeltas: [CGPoint],
+        zone: ScrollZone
+    ) {
+        guard !hasEmittedScrollBegan, !acceptedDeltas.isEmpty else { return }
+
+        let net = acceptedDeltas.reduce(into: CGPoint.zero) { partial, delta in
+            partial.x += delta.x
+            partial.y += delta.y
+        }
+
+        let scrollX: Int32
+        let scrollY: Int32
+        switch zone {
+        case .leftEdge, .rightEdge:
+            guard net.y != 0 else { return }
+            scrollX = 0
+            scrollY = net.y > 0 ? -1 : 1
+            scrollAccumulatorY = 0
+
+        case .bottomEdge, .topEdge:
+            guard net.x != 0 else { return }
+            scrollX = net.x > 0 ? 1 : -1
+            scrollY = 0
+            scrollAccumulatorX = 0
+
+        default:
+            return
+        }
+
+        hasEmittedScrollBegan = true
+        emittedScrollEventCount += 1
+        emittedScrollPixelsX += Int64(scrollX)
+        emittedScrollPixelsY += Int64(scrollY)
+        postScrollEvent(
+            deltaX: scrollX,
+            deltaY: scrollY,
+            scrollPhase: 1,
+            momentumPhase: 0
+        )
     }
 
     /// Post a scroll wheel CGEvent with pixel-precise deltas.
@@ -1578,29 +2189,14 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         let screenHeight = NSScreen.main?.frame.height ?? 0
         let cgPoint = CGPoint(x: mouseLocation.x, y: screenHeight - mouseLocation.y)
 
-        // Middle mouse down
-        if let downEvent = CGEvent(
-            mouseEventSource: nil,
-            mouseType: .otherMouseDown,
-            mouseCursorPosition: cgPoint,
-            mouseButton: .center
+        if postPairedMouseEvents(
+            downType: .otherMouseDown,
+            upType: .otherMouseUp,
+            at: cgPoint,
+            button: .center
         ) {
-            tagTrackPalMouseEvent(downEvent)
-            downEvent.post(tap: .cghidEventTap)
+            LogManager.shared.log("Middle click triggered")
         }
-
-        // Middle mouse up
-        if let upEvent = CGEvent(
-            mouseEventSource: nil,
-            mouseType: .otherMouseUp,
-            mouseCursorPosition: cgPoint,
-            mouseButton: .center
-        ) {
-            tagTrackPalMouseEvent(upEvent)
-            upEvent.post(tap: .cghidEventTap)
-        }
-
-        LogManager.shared.log("Middle click triggered")
     }
 
     // MARK: - Corner Triggers
@@ -1654,25 +2250,12 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         let screenHeight = NSScreen.main?.frame.height ?? 0
         let cgPoint = CGPoint(x: mouseLocation.x, y: screenHeight - mouseLocation.y)
 
-        if let downEvent = CGEvent(
-            mouseEventSource: nil,
-            mouseType: .rightMouseDown,
-            mouseCursorPosition: cgPoint,
-            mouseButton: .right
-        ) {
-            tagTrackPalMouseEvent(downEvent)
-            downEvent.post(tap: .cghidEventTap)
-        }
-
-        if let upEvent = CGEvent(
-            mouseEventSource: nil,
-            mouseType: .rightMouseUp,
-            mouseCursorPosition: cgPoint,
-            mouseButton: .right
-        ) {
-            tagTrackPalMouseEvent(upEvent)
-            upEvent.post(tap: .cghidEventTap)
-        }
+        _ = postPairedMouseEvents(
+            downType: .rightMouseDown,
+            upType: .rightMouseUp,
+            at: cgPoint,
+            button: .right
+        )
     }
 
     private func executeCornerAction(_ action: CornerAction) {
@@ -1719,28 +2302,49 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         // Notification center is at the top-right, click near the clock area
         let clickPoint = CGPoint(x: screenFrame.maxX - 20, y: 12) // Near top-right
 
-        // Mouse down
-        if let downEvent = CGEvent(
-            mouseEventSource: nil,
-            mouseType: .leftMouseDown,
-            mouseCursorPosition: clickPoint,
-            mouseButton: .left
-        ) {
-            tagTrackPalMouseEvent(downEvent)
-            downEvent.post(tap: .cghidEventTap)
-        }
-
-        // Mouse up
-        if let upEvent = CGEvent(
-            mouseEventSource: nil,
-            mouseType: .leftMouseUp,
-            mouseCursorPosition: clickPoint,
-            mouseButton: .left
-        ) {
-            tagTrackPalMouseEvent(upEvent)
-            upEvent.post(tap: .cghidEventTap)
-        }
+        _ = postPairedMouseEvents(
+            downType: .leftMouseDown,
+            upType: .leftMouseUp,
+            at: clickPoint,
+            button: .left
+        )
     }
+}
+
+@discardableResult
+private func postPairedMouseEvents(
+    downType: CGEventType,
+    upType: CGEventType,
+    at location: CGPoint,
+    button: CGMouseButton,
+    flags: CGEventFlags = [],
+    clickState: Int64 = 1
+) -> Bool {
+    let source = CGEventSource(stateID: .combinedSessionState)
+    guard let downEvent = CGEvent(
+        mouseEventSource: source,
+        mouseType: downType,
+        mouseCursorPosition: location,
+        mouseButton: button
+    ), let upEvent = CGEvent(
+        mouseEventSource: source,
+        mouseType: upType,
+        mouseCursorPosition: location,
+        mouseButton: button
+    ) else {
+        LogManager.shared.log("Failed to construct paired synthetic mouse events")
+        return false
+    }
+
+    downEvent.flags = flags
+    upEvent.flags = flags
+    downEvent.setIntegerValueField(.mouseEventClickState, value: clickState)
+    upEvent.setIntegerValueField(.mouseEventClickState, value: clickState)
+    tagTrackPalMouseEvent(downEvent)
+    tagTrackPalMouseEvent(upEvent)
+    downEvent.post(tap: .cghidEventTap)
+    upEvent.post(tap: .cghidEventTap)
+    return true
 }
 
 private func tagTrackPalMouseEvent(_ event: CGEvent) {
@@ -1749,21 +2353,34 @@ private func tagTrackPalMouseEvent(_ event: CGEvent) {
 
 // MARK: - C Callback with Refcon
 
-/// Thread-safe storage for callback state shared across device callbacks
-/// Using os_unfair_lock for synchronization — @unchecked Sendable because we handle safety manually
-private final class CallbackState: @unchecked Sendable {
-    static let shared = CallbackState()
-    private var lock = os_unfair_lock()
-    private var _previousFingerCount: Int32 = 0
-    private var _hasLoggedTouchValues: Bool = false
+private func drainPendingForceSamples(
+    from callbackContext: DeviceCallbackContext,
+    contactGeneration: UInt64,
+    throughEventTimestamp cutoffTimestamp: Double,
+    into scroller: TrackpadZoneScroller
+) {
+    let samples = callbackContext.takePendingForceSamples(
+        contactGeneration: contactGeneration,
+        throughEventTimestamp: cutoffTimestamp
+    )
+    guard !samples.isEmpty else { return }
 
-    var previousFingerCount: Int32 {
-        get { os_unfair_lock_lock(&lock); defer { os_unfair_lock_unlock(&lock) }; return _previousFingerCount }
-        set { os_unfair_lock_lock(&lock); _previousFingerCount = newValue; os_unfair_lock_unlock(&lock) }
+    let deviceID = callbackContext.deviceID
+    guard scroller.shouldAcceptForceSample(
+        deviceID: deviceID,
+        contactGeneration: contactGeneration
+    ) else {
+        return
     }
-    var hasLoggedTouchValues: Bool {
-        get { os_unfair_lock_lock(&lock); defer { os_unfair_lock_unlock(&lock) }; return _hasLoggedTouchValues }
-        set { os_unfair_lock_lock(&lock); _hasLoggedTouchValues = newValue; os_unfair_lock_unlock(&lock) }
+
+    for sample in samples {
+        scroller.processForceCentroid(
+            x: sample.x,
+            y: sample.y,
+            force: sample.force,
+            sampleTimestamp: sample.sampleTimestamp,
+            sampleUptime: sample.sampleUptime
+        )
     }
 }
 
@@ -1775,22 +2392,32 @@ private func touchCallbackWithRefcon(
     frame: Int32,
     refcon: UnsafeMutableRawPointer?
 ) {
-    guard let touches = touches else { return }
+    guard let refcon else { return }
+    let callbackContext = Unmanaged<DeviceCallbackContext>
+        .fromOpaque(refcon)
+        .takeUnretainedValue()
+    let callbackUptime = CACurrentMediaTime()
 
     let scroller = TrackpadZoneScroller.shared
     let touchCount = Int(numTouches)
-    let prevCount = Int(CallbackState.shared.previousFingerCount)
-    CallbackState.shared.previousFingerCount = numTouches
+    let fingerFrameState = callbackContext.replaceFingerCount(
+        with: numTouches,
+        eventTimestamp: timestamp,
+        eventUptime: callbackUptime
+    )
+    let prevCount = Int(fingerFrameState.previousFingerCount)
+    let contactGeneration = fingerFrameState.contactGeneration
+    let deviceID = callbackContext.deviceID
 
     // Only process single-finger touches for zone scrolling
     if numTouches == 1 {
+        guard let touches else { return }
         let touch = touches[0]
         let ts = timestamp
 
         // Diagnostic: log actual MTTouch values for threshold calibration
-        if !CallbackState.shared.hasLoggedTouchValues && touch.state >= 4 {
-            CallbackState.shared.hasLoggedTouchValues = true
-            LogManager.shared.log(String(format: "[DIAG] MTTouch values - density=%.4f, majorAxis=%.4f, minorAxis=%.4f, size=%.4f, angle=%.4f, state=%d", touch.density, touch.majorAxis, touch.minorAxis, touch.size, touch.angle, touch.state))
+        if touch.state >= 4, callbackContext.claimTouchValueDiagnostic() {
+            LogManager.shared.log(String(format: "[DIAG] Device %d MTTouch values - density=%.4f, majorAxis=%.4f, minorAxis=%.4f, size=%.4f, angle=%.4f, state=%d", deviceID, touch.density, touch.majorAxis, touch.minorAxis, touch.size, touch.angle, touch.state))
         }
 
         // Extract values from the touch struct BEFORE dispatching
@@ -1801,35 +2428,122 @@ private func touchCallbackWithRefcon(
         let majorAxis = touch.majorAxis
         let minorAxis = touch.minorAxis
 
-        DispatchQueue.main.async {
+        // A state-1 frame is hover, not a failed physical contact. Ignoring it
+        // here lets a later state 2/3 in the same raw generation claim input
+        // instead of being quarantined by the arbitration gate until zero.
+        guard state != 1 else { return }
+
+        TouchCallbackSequencer.shared.enqueue(timestamp: ts) {
+            guard scroller.isDeviceCallbackActive(deviceID: deviceID) else {
+                return
+            }
+            guard let acceptedPrevCount = scroller.acceptedPreviousFingerCount(
+                deviceID: deviceID,
+                contactGeneration: contactGeneration,
+                touchCount: touchCount,
+                devicePreviousFingerCount: prevCount,
+                allowClaimNewContact: state == 2 || state == 3,
+                eventTimestamp: ts
+            ) else { return }
+
             // Handle finger count transition synchronously within main thread block
-            if touchCount != prevCount {
-                scroller.handleFingerCountTransition(from: prevCount, to: touchCount)
+            if touchCount != acceptedPrevCount {
+                scroller.handleFingerCountTransition(from: acceptedPrevCount, to: touchCount)
             }
 
             // Check debounce after multi→single transition
             guard scroller.shouldProcessSingleFingerTouch() else { return }
 
+            // Existing contacts drain force before the touch frame so scroll
+            // direction still gets the first commit decision on this frame.
+            // A new contact establishes its zone first, then drains any force
+            // sample that raced ahead of the main-queue touch block.
+            if acceptedPrevCount > 0 {
+                drainPendingForceSamples(
+                    from: callbackContext,
+                    contactGeneration: contactGeneration,
+                    throughEventTimestamp: ts,
+                    into: scroller
+                )
+            }
+
             // Apply touch filtering, then process
             scroller.processFilteredTouch(
                 x: x, y: y, state: state, timestamp: ts,
+                eventUptime: callbackUptime,
                 density: density, majorAxis: majorAxis, minorAxis: minorAxis
             )
+
+            if acceptedPrevCount == 0 {
+                drainPendingForceSamples(
+                    from: callbackContext,
+                    contactGeneration: contactGeneration,
+                    throughEventTimestamp: ts,
+                    into: scroller
+                )
+            }
         }
     } else if numTouches == 0 {
         let ts = timestamp
-        DispatchQueue.main.async {
-            if touchCount != prevCount {
-                scroller.handleFingerCountTransition(from: prevCount, to: touchCount)
+        TouchCallbackSequencer.shared.enqueue(timestamp: ts) {
+            guard scroller.isDeviceCallbackActive(deviceID: deviceID) else {
+                return
             }
-            scroller.processTouch(x: 0, y: 0, state: 7, timestamp: ts)
+            // Drain samples captured before the physical zero boundary while
+            // this contact still owns the arbitration gate.
+            drainPendingForceSamples(
+                from: callbackContext,
+                contactGeneration: contactGeneration,
+                throughEventTimestamp: ts,
+                into: scroller
+            )
+            callbackContext.discardPendingForceSamples(
+                contactGeneration: contactGeneration
+            )
+
+            guard let acceptedPrevCount = scroller.acceptedPreviousFingerCount(
+                deviceID: deviceID,
+                contactGeneration: contactGeneration,
+                touchCount: touchCount,
+                devicePreviousFingerCount: prevCount,
+                eventTimestamp: ts
+            ) else { return }
+
+            if touchCount != acceptedPrevCount {
+                scroller.handleFingerCountTransition(from: acceptedPrevCount, to: touchCount)
+            }
+            scroller.processTouch(
+                x: 0,
+                y: 0,
+                state: 7,
+                timestamp: ts,
+                eventUptime: callbackUptime
+            )
+            scroller.completeZeroTouchBoundary()
         }
     } else {
         // Multi-finger: handle transition, let system handle gestures
-        DispatchQueue.main.async {
-            if touchCount != prevCount {
-                scroller.handleFingerCountTransition(from: prevCount, to: touchCount)
+        TouchCallbackSequencer.shared.enqueue(timestamp: timestamp) {
+            guard scroller.isDeviceCallbackActive(deviceID: deviceID) else {
+                return
             }
+            guard let acceptedPrevCount = scroller.acceptedPreviousFingerCount(
+                deviceID: deviceID,
+                contactGeneration: contactGeneration,
+                touchCount: touchCount,
+                devicePreviousFingerCount: prevCount,
+                eventTimestamp: timestamp
+            ) else { return }
+
+            if touchCount != acceptedPrevCount {
+                scroller.handleFingerCountTransition(from: acceptedPrevCount, to: touchCount)
+            }
+            drainPendingForceSamples(
+                from: callbackContext,
+                contactGeneration: contactGeneration,
+                throughEventTimestamp: timestamp,
+                into: scroller
+            )
         }
     }
 }
@@ -1839,19 +2553,40 @@ private func forceCentroidCallbackWithRefcon(
     centroid: UnsafeMutablePointer<MTForceCentroid>?,
     refcon: UnsafeMutableRawPointer?
 ) {
-    guard let centroid = centroid else { return }
+    guard let centroid, let refcon else { return }
+    let callbackContext = Unmanaged<DeviceCallbackContext>
+        .fromOpaque(refcon)
+        .takeUnretainedValue()
 
     let forceCentroid = centroid.pointee
     let x = forceCentroid.normalizedX
     let y = forceCentroid.normalizedY
     let force = forceCentroid.force
-
-    DispatchQueue.main.async {
-        TrackpadZoneScroller.shared.processForceCentroid(x: x, y: y, force: force)
-    }
+    let sampleTimestamp = forceCentroid.timestamp
+    let sampleUptime = CACurrentMediaTime()
+    _ = callbackContext.recordForceSample(
+        x: x,
+        y: y,
+        force: force,
+        sampleTimestamp: sampleTimestamp,
+        sampleUptime: sampleUptime
+    )
 }
 
 // MARK: - Scroll Event Interceptor
+
+private func monotonicNanoseconds(
+    fromSystemUptime uptime: Double,
+    fallback: UInt64
+) -> UInt64 {
+    let nanosecondsPerSecond = 1_000_000_000.0
+    guard uptime.isFinite,
+          uptime > 0,
+          uptime <= Double(UInt64.max) / nanosecondsPerSecond else {
+        return fallback
+    }
+    return UInt64((uptime * nanosecondsPerSecond).rounded())
+}
 
 /// Intercepts system scroll events to prevent conflicts with TrackPal-generated events
 final class ScrollEventInterceptor: @unchecked Sendable {
@@ -1862,6 +2597,17 @@ final class ScrollEventInterceptor: @unchecked Sendable {
     private var runLoopSource: CFRunLoopSource?
     private var isRunning: Bool = false
     private var primaryClickGate = PrimaryClickSuppressionGate()
+    private var activePrimaryClickToken: UInt64?
+    private struct PrimaryClickSnapshot {
+        var location: CGPoint?
+        var flags: CGEventFlags = []
+        var clickState: Int64 = 1
+    }
+    private struct PrimaryClickCaptureState {
+        var completedSnapshots: [PrimaryClickSnapshot] = []
+        var pendingSnapshot: PrimaryClickSnapshot?
+    }
+    private var primaryClickCaptureStates: [UInt64: PrimaryClickCaptureState] = [:]
     private let lock = NSLock()
 
     private init() {}
@@ -1907,6 +2653,9 @@ final class ScrollEventInterceptor: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
+        primaryClickGate.reset()
+        clearAllCapturedPrimaryClicksLocked()
+
         guard isRunning else { return }
 
         if let eventTap = eventTap {
@@ -1923,23 +2672,71 @@ final class ScrollEventInterceptor: @unchecked Sendable {
         LogManager.shared.log("Scroll event interceptor stopped")
     }
 
-    func suppressPrimaryClickForPendingForceAction(duration: TimeInterval = 2.0) {
-        armPrimaryClickSuppression(duration: duration)
-        LogManager.shared.log("Primary click suppression armed for pending force action")
-    }
-
-    func suppressPrimaryClickForForceAction(duration: TimeInterval = 1.25) {
-        armPrimaryClickSuppression(duration: duration)
-        LogManager.shared.log("Primary click suppression armed after force action")
-    }
-
-    private func armPrimaryClickSuppression(duration: TimeInterval) {
-        let now = DispatchTime.now().uptimeNanoseconds
-        let durationNanoseconds = UInt64(max(duration, 0) * 1_000_000_000)
+    func beginPendingForceGesture(
+        token: UInt64,
+        gestureUptime: Double
+    ) {
+        let receivedAt = DispatchTime.now().uptimeNanoseconds
+        let gestureTimestamp = monotonicNanoseconds(
+            fromSystemUptime: gestureUptime,
+            fallback: receivedAt
+        )
 
         lock.lock()
-        primaryClickGate.arm(now: now, durationNanoseconds: durationNanoseconds)
+        primaryClickGate.begin(
+            token: token,
+            at: gestureTimestamp,
+            receivedAt: receivedAt
+        )
+        primaryClickCaptureStates = primaryClickCaptureStates.filter {
+            primaryClickGate.contains(token: $0.key)
+        }
+        activePrimaryClickToken = token
+        primaryClickCaptureStates[token] = PrimaryClickCaptureState()
         lock.unlock()
+
+        LogManager.shared.log("Primary click capture began for gesture \(token)")
+    }
+
+    func finishPendingForceGesture(
+        token: UInt64,
+        replayCapturedClick: Bool,
+        gestureUptime: Double?
+    ) {
+        let receivedAt = DispatchTime.now().uptimeNanoseconds
+        let gestureTimestamp = gestureUptime.map {
+            monotonicNanoseconds(
+                fromSystemUptime: $0,
+                fallback: receivedAt
+            )
+        } ?? receivedAt
+        let resolution: PrimaryClickSuppressionGate.Resolution
+        var snapshots: [PrimaryClickSnapshot] = []
+
+        lock.lock()
+        guard activePrimaryClickToken == token else {
+            lock.unlock()
+            return
+        }
+
+        resolution = primaryClickGate.finish(
+            token: token,
+            replayCapturedClick: replayCapturedClick,
+            at: gestureTimestamp,
+            receivedAt: receivedAt
+        )
+        if activePrimaryClickToken == token {
+            activePrimaryClickToken = nil
+        }
+        if resolution != .none {
+            snapshots = consumePrimaryClickSnapshotsLocked(for: resolution)
+        }
+        lock.unlock()
+
+        resolvePrimaryClick(
+            resolution,
+            snapshots: snapshots
+        )
     }
 
     func shouldSuppressPrimaryClick(type: CGEventType, event: CGEvent) -> Bool {
@@ -1952,17 +2749,186 @@ final class ScrollEventInterceptor: @unchecked Sendable {
             return false
         }
 
-        let now = DispatchTime.now().uptimeNanoseconds
+        let receivedAt = DispatchTime.now().uptimeNanoseconds
+        let eventTimestamp = event.timestamp > 0
+            ? event.timestamp
+            : receivedAt
+
+        let decision: PrimaryClickSuppressionGate.CaptureDecision
+        var resolution: PrimaryClickSuppressionGate.Resolution?
+        var resolvedSnapshots: [PrimaryClickSnapshot] = []
 
         lock.lock()
-        let shouldSuppress = primaryClickGate.shouldSuppress(event: mouseEvent, now: now)
+        decision = primaryClickGate.capture(
+            event: mouseEvent,
+            at: eventTimestamp,
+            receivedAt: receivedAt
+        )
+        switch decision {
+        case .pass:
+            break
+
+        case .passAndReset:
+            primaryClickCaptureStates = primaryClickCaptureStates.filter {
+                primaryClickGate.contains(token: $0.key)
+            }
+            if let token = activePrimaryClickToken,
+               !primaryClickGate.contains(token: token) {
+                activePrimaryClickToken = nil
+            }
+
+        case let .suppress(token):
+            recordPrimaryClickSnapshotLocked(
+                token: token,
+                event: mouseEvent,
+                cgEvent: event
+            )
+
+        case let .suppressAndResolve(capturedResolution):
+            resolution = capturedResolution
+            if let token = capturedResolution.token {
+                recordPrimaryClickSnapshotLocked(
+                    token: token,
+                    event: mouseEvent,
+                    cgEvent: event
+                )
+                resolvedSnapshots = consumePrimaryClickSnapshotsLocked(
+                    for: capturedResolution
+                )
+                if activePrimaryClickToken == token {
+                    activePrimaryClickToken = nil
+                }
+            }
+        }
+        primaryClickCaptureStates = primaryClickCaptureStates.filter {
+            primaryClickGate.contains(token: $0.key)
+        }
         lock.unlock()
+
+        if let resolution {
+            resolvePrimaryClick(resolution, snapshots: resolvedSnapshots)
+        }
+
+        let shouldSuppress: Bool
+        switch decision {
+        case .suppress, .suppressAndResolve:
+            shouldSuppress = true
+        case .pass, .passAndReset:
+            shouldSuppress = false
+        }
 
         if shouldSuppress {
             LogManager.shared.log("Native left click suppressed during force action guard")
         }
 
         return shouldSuppress
+    }
+
+    private func recordPrimaryClickSnapshotLocked(
+        token: UInt64,
+        event: PrimaryClickSuppressionGate.MouseEvent,
+        cgEvent: CGEvent
+    ) {
+        var state = primaryClickCaptureStates[token]
+            ?? PrimaryClickCaptureState()
+
+        switch event {
+        case .leftMouseDown:
+            guard state.pendingSnapshot == nil else { return }
+            state.pendingSnapshot = PrimaryClickSnapshot(
+                location: cgEvent.location,
+                flags: cgEvent.flags,
+                clickState: cgEvent.getIntegerValueField(.mouseEventClickState)
+            )
+
+        case .leftMouseUp:
+            guard let pendingSnapshot = state.pendingSnapshot else { return }
+            state.completedSnapshots.append(pendingSnapshot)
+            state.pendingSnapshot = nil
+        }
+
+        primaryClickCaptureStates[token] = state
+    }
+
+    private func consumePrimaryClickSnapshotsLocked(
+        for resolution: PrimaryClickSuppressionGate.Resolution
+    ) -> [PrimaryClickSnapshot] {
+        guard let token = resolution.token,
+              var state = primaryClickCaptureStates[token] else {
+            return []
+        }
+
+        let snapshots: [PrimaryClickSnapshot]
+        switch resolution {
+        case .none:
+            return []
+
+        case .discard:
+            state.completedSnapshots.removeAll()
+            snapshots = []
+
+        case let .replayClicks(_, pairs):
+            let replayCount = min(pairs.count, state.completedSnapshots.count)
+            snapshots = Array(state.completedSnapshots.prefix(replayCount))
+            state.completedSnapshots.removeFirst(replayCount)
+        }
+
+        if primaryClickGate.contains(token: token) {
+            primaryClickCaptureStates[token] = state
+        } else {
+            primaryClickCaptureStates.removeValue(forKey: token)
+        }
+        return snapshots
+    }
+
+    private func replayPrimaryClick(
+        at location: CGPoint,
+        flags: CGEventFlags,
+        clickState: Int64
+    ) {
+        _ = postPairedMouseEvents(
+            downType: .leftMouseDown,
+            upType: .leftMouseUp,
+            at: location,
+            button: .left,
+            flags: flags,
+            clickState: clickState
+        )
+    }
+
+    private func resolvePrimaryClick(
+        _ resolution: PrimaryClickSuppressionGate.Resolution,
+        snapshots: [PrimaryClickSnapshot]
+    ) {
+        guard case let .replayClicks(token, pairs) = resolution else { return }
+        guard snapshots.count == pairs.count else {
+            LogManager.shared.log(
+                "Primary click replay snapshot mismatch for gesture \(token): pairs=\(pairs.count) snapshots=\(snapshots.count)"
+            )
+            return
+        }
+
+        for snapshot in snapshots {
+            guard let location = snapshot.location else {
+                LogManager.shared.log(
+                    "Primary click replay missing location for gesture \(token)"
+                )
+                continue
+            }
+            replayPrimaryClick(
+                at: location,
+                flags: snapshot.flags,
+                clickState: snapshot.clickState
+            )
+        }
+        LogManager.shared.log(
+            "Native left click replayed for gesture \(token), pairs=\(pairs.count)"
+        )
+    }
+
+    private func clearAllCapturedPrimaryClicksLocked() {
+        activePrimaryClickToken = nil
+        primaryClickCaptureStates.removeAll()
     }
 
     /// Check if an event should be suppressed
@@ -2015,7 +2981,8 @@ private func scrollInterceptorCallback(
 
     // Suppress cursor movement during active zone scrolling
     if type == .mouseMoved {
-        if TrackpadZoneScroller.shared.isActivelyScrollingInZone {
+        if TrackpadZoneScroller.shared.isActivelyScrollingInZone
+            || TrackpadZoneScroller.shared.isEvaluatingScrollCandidate {
             return nil
         }
         return Unmanaged.passUnretained(event)

@@ -56,6 +56,15 @@ CF_RETURNS_RETAINED CFArrayRef _Nullable MTDeviceCreateList(void);
 void MTRegisterContactFrameCallback(MTDeviceRef device, MTContactCallbackFunction callback);
 void MTUnregisterContactFrameCallback(MTDeviceRef device, MTContactCallbackFunction callback);
 void MTRegisterContactFrameCallbackWithRefcon(MTDeviceRef device, MTContactCallbackFunctionWithRefcon callback, void *refcon);
+// The private framework exports one unregister symbol for both callback forms.
+// Keep the refcon function-pointer type at Swift call sites, then erase it only
+// inside this C shim when unregistering the exact same callback address.
+static inline void MTUnregisterContactFrameCallbackWithRefcon(
+    MTDeviceRef device,
+    MTContactCallbackFunctionWithRefcon callback
+) {
+    MTUnregisterContactFrameCallback(device, (MTContactCallbackFunction)callback);
+}
 void MTRegisterForceCentroidCallbackWithRefcon(MTDeviceRef device, MTForceCentroidCallbackFunctionWithRefcon callback, void *refcon);
 void MTUnregisterForceCentroidCallback(MTDeviceRef device, MTForceCentroidCallbackFunctionWithRefcon callback);
 void MTDeviceStart(MTDeviceRef device, int mode);
