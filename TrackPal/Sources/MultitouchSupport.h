@@ -65,7 +65,7 @@ static inline void MTUnregisterContactFrameCallbackWithRefcon(
 ) {
     MTUnregisterContactFrameCallback(device, (MTContactCallbackFunction)callback);
 }
-void MTRegisterForceCentroidCallbackWithRefcon(MTDeviceRef device, MTForceCentroidCallbackFunctionWithRefcon callback, void *refcon);
+bool MTRegisterForceCentroidCallbackWithRefcon(MTDeviceRef device, MTForceCentroidCallbackFunctionWithRefcon callback, void *refcon);
 void MTUnregisterForceCentroidCallback(MTDeviceRef device, MTForceCentroidCallbackFunctionWithRefcon callback);
 void MTDeviceStart(MTDeviceRef device, int mode);
 void MTDeviceStop(MTDeviceRef device);

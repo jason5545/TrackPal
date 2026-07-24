@@ -132,7 +132,7 @@ struct ScrollIntentGate {
             return min(1, normalizedNetDistance / normalizedPathLength)
         }
 
-        fileprivate mutating func append(_ sample: Sample) {
+        mutating func append(_ sample: Sample) {
             sampleCount += 1
             rawNetX += sample.dx
             rawNetY += sample.dy
@@ -278,6 +278,33 @@ struct ScrollIntentGate {
         provisionalInitialSample = nil
         provisionalInitialContradictsAxis = false
         terminalDecision = nil
+    }
+
+    /// A very short outward nudge at the physical right boundary is usually
+    /// contact settling, not a request to move the pointer back into the app.
+    /// Runtime may discard this prefix once and open a fresh decision window;
+    /// activation thresholds in that second window remain unchanged.
+    func isRecoverableOutwardBoundaryPrefix(
+        outwardSign: CGFloat,
+        maximumSampleCount: Int = 6,
+        maximumCompensatedOffAxisDisplacement: CGFloat = 0.016
+    ) -> Bool {
+        guard axis == .vertical,
+              case .some(.reject(reason: .offAxisDominant)) = terminalDecision,
+              outwardSign.isFinite,
+              outwardSign != 0,
+              maximumSampleCount > 0,
+              maximumCompensatedOffAxisDisplacement.isFinite,
+              maximumCompensatedOffAxisDisplacement > 0,
+              metrics.sampleCount <= maximumSampleCount else {
+            return false
+        }
+
+        let signedOutwardNet = metrics.normalizedNetX * outwardSign
+        return signedOutwardNet > 0
+            && signedOutwardNet < maximumCompensatedOffAxisDisplacement
+            && metrics.normalizedPathX < maximumCompensatedOffAxisDisplacement
+            && abs(metrics.netY) < configuration.activationDisplacement
     }
 
     private mutating func appendAccepted(_ sample: Sample) {
@@ -455,8 +482,14 @@ struct ScrollIntentGate {
                 )
             }
 
+            // With no adjacent scroll axis there is nothing for movement to
+            // promote into. Keep the force candidate alive while it is still
+            // inside the existing movement cap; the force gate remains the
+            // authority on pressure, duration, and final excursion.
             guard !availableAxes.isEmpty else {
-                return .reject(reason: .noAvailableAxis)
+                return .preserveForceCandidate(
+                    maximumExcursion: maximumExcursion
+                )
             }
             guard availableAxes.contains(dominantAxis) else {
                 return .reject(reason: .movementTargetsUnavailableAxis)
@@ -578,5 +611,170 @@ struct ScrollIntentGate {
     private mutating func finish(with decision: Decision) -> Decision {
         terminalDecision = decision
         return decision
+    }
+}
+
+/// Pure boundaries for the one-shot scroll recovery windows. Runtime owns the
+/// state transition; this type keeps raw-prefix and exact sample/time limits
+/// testable without exposing TrackpadZoneScroller's mutable gesture state.
+struct ScrollIntentRecoveryPolicy {
+    static let defaultRecoveryMaxSamples = 16
+    static let defaultRecoveryMaxDuration: Double = 0.150
+    static let defaultOutwardPrefixMaxDuration: Double = 0.150
+    static let minimumCornerRecoveryConfirmationSamples = 3
+
+    /// The gate winsorizes its first sample, so its metrics alone cannot prove
+    /// that the physical prefix was small. Check the untouched samples too:
+    /// recovery is reserved for a short, coherent nudge toward the trackpad's
+    /// outer boundary, never a clear cursor move hidden by winsorization.
+    static func rawOutwardPrefixIsWithinBounds(
+        samples: [ScrollIntentGate.Sample],
+        outwardSign: CGFloat,
+        elapsed: Double = 0,
+        maximumPhysicalPath: CGFloat = 0.016,
+        minimumPathCoherence: CGFloat = 0.90
+    ) -> Bool {
+        guard !samples.isEmpty,
+              outwardSign.isFinite,
+              outwardSign != 0,
+              maximumPhysicalPath.isFinite,
+              maximumPhysicalPath > 0,
+              minimumPathCoherence.isFinite,
+              (0...1).contains(minimumPathCoherence),
+              samples.allSatisfy({ $0.dx.isFinite && $0.dy.isFinite }) else {
+            return false
+        }
+
+        var rawMetrics = ScrollIntentGate.Metrics()
+        samples.forEach { rawMetrics.append($0) }
+        return rawOutwardPrefixIsWithinBounds(
+            rawMetrics: rawMetrics,
+            outwardSign: outwardSign,
+            elapsed: elapsed,
+            maximumPhysicalPath: maximumPhysicalPath,
+            minimumPathCoherence: minimumPathCoherence
+        )
+    }
+
+    static func rawOutwardPrefixIsWithinBounds(
+        rawMetrics: ScrollIntentGate.Metrics,
+        outwardSign: CGFloat,
+        elapsed: Double,
+        maximumDuration: Double = defaultOutwardPrefixMaxDuration,
+        maximumPhysicalPath: CGFloat = 0.016,
+        minimumPathCoherence: CGFloat = 0.90
+    ) -> Bool {
+        guard rawMetrics.sampleCount > 0,
+              outwardSign.isFinite,
+              outwardSign != 0,
+              elapsed.isFinite,
+              elapsed >= 0,
+              maximumDuration.isFinite,
+              maximumDuration > 0,
+              elapsed < maximumDuration,
+              maximumPhysicalPath.isFinite,
+              maximumPhysicalPath > 0,
+              minimumPathCoherence.isFinite,
+              (0...1).contains(minimumPathCoherence),
+              rawMetrics.normalizedNetX.isFinite,
+              rawMetrics.netY.isFinite,
+              rawMetrics.normalizedPathX.isFinite,
+              rawMetrics.normalizedPathLength.isFinite,
+              rawMetrics.maximumCompensatedExcursion.isFinite else {
+            return false
+        }
+
+        let signedOutwardNet = rawMetrics.normalizedNetX * outwardSign
+
+        return signedOutwardNet > 0
+            && rawMetrics.normalizedPathX < maximumPhysicalPath
+            && rawMetrics.normalizedPathLength < maximumPhysicalPath
+            && rawMetrics.maximumCompensatedExcursion < maximumPhysicalPath
+            && rawMetrics.pathCoherence >= minimumPathCoherence
+    }
+
+    static func shouldBeginEarlyOutwardRecovery(
+        alreadyUsed: Bool,
+        prefixIsRecoverable: Bool
+    ) -> Bool {
+        !alreadyUsed && prefixIsRecoverable
+    }
+
+    static func shouldBeginCornerRecovery(
+        alreadyUsed: Bool,
+        resolutionIsAwaitingMoreEvidence: Bool,
+        isEligibleContact: Bool,
+        availableAxisCount: Int,
+        sampleCount: Int,
+        initialSampleLimit: Int,
+        maximumExcursion: CGFloat,
+        forceCandidateMaximumExcursion: CGFloat,
+        hasTriggeringForceCandidate: Bool
+    ) -> Bool {
+        guard !alreadyUsed,
+              resolutionIsAwaitingMoreEvidence,
+              isEligibleContact,
+              availableAxisCount > 0,
+              initialSampleLimit > 0,
+              sampleCount >= initialSampleLimit,
+              maximumExcursion.isFinite,
+              forceCandidateMaximumExcursion.isFinite,
+              maximumExcursion >= forceCandidateMaximumExcursion,
+              !hasTriggeringForceCandidate else {
+            return false
+        }
+        return true
+    }
+
+    static func cornerRecoveryCanActivate(freshSampleCount: Int) -> Bool {
+        freshSampleCount >= minimumCornerRecoveryConfirmationSamples
+    }
+
+    static func isScrollOnlyCornerDecision(
+        isCorner: Bool,
+        hasActiveForceCandidate: Bool,
+        forceGestureDisqualified: Bool,
+        maximumExcursion: CGFloat,
+        forceCandidateMaximumExcursion: CGFloat
+    ) -> Bool {
+        guard isCorner else { return false }
+        guard maximumExcursion.isFinite,
+              forceCandidateMaximumExcursion.isFinite,
+              forceCandidateMaximumExcursion > 0 else {
+            return true
+        }
+
+        return !hasActiveForceCandidate
+            || forceGestureDisqualified
+            || maximumExcursion >= forceCandidateMaximumExcursion
+    }
+
+    static func shouldExpireOnEvidenceGap(
+        hasActiveRecovery: Bool,
+        isScrollOnlyCorner: Bool
+    ) -> Bool {
+        hasActiveRecovery || isScrollOnlyCorner
+    }
+
+    /// Checked both before accepting a new frame and after an unresolved
+    /// decision. This lets the 16th physical sample confirm an intent, but an
+    /// unresolved 16-sample window cannot receive a 17th sample.
+    static func recoveryHasExpired(
+        sampleCount: Int,
+        elapsed: Double,
+        maximumSampleCount: Int = defaultRecoveryMaxSamples,
+        maximumDuration: Double = defaultRecoveryMaxDuration
+    ) -> Bool {
+        guard sampleCount >= 0,
+              elapsed.isFinite,
+              elapsed >= 0,
+              maximumSampleCount > 0,
+              maximumDuration.isFinite,
+              maximumDuration > 0 else {
+            return true
+        }
+
+        return sampleCount >= maximumSampleCount
+            || elapsed >= maximumDuration
     }
 }

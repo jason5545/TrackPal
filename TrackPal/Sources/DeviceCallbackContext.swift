@@ -1,6 +1,14 @@
 import Foundation
 import os
 
+/// Contact-frame timestamps arrive in seconds, while force-centroid timestamps
+/// use the framework's raw millisecond clock. Convert them before generation
+/// assignment and cutoff comparisons so both callback streams share one scale.
+func forceCentroidTimestampInTouchSeconds(_ rawTimestamp: Double) -> Double {
+    guard rawTimestamp.isFinite, rawTimestamp > 0 else { return 0 }
+    return rawTimestamp / 1_000.0
+}
+
 struct DeviceFingerFrameState {
     let previousFingerCount: Int32
     let contactGeneration: UInt64
@@ -29,6 +37,7 @@ final class DeviceCallbackContext: @unchecked Sendable {
     private var lastEndedContactGeneration: UInt64 = 0
     private var pendingForceSamples: [BufferedForceSample] = []
     private var hasLoggedTouchValues = false
+    private var hasLoggedForceValues = false
 
     init(deviceID: Int) {
         self.deviceID = deviceID
@@ -67,7 +76,14 @@ final class DeviceCallbackContext: @unchecked Sendable {
         os_unfair_lock_lock(&lock)
         defer { os_unfair_lock_unlock(&lock) }
 
-        guard force >= 70, sampleTimestamp > 0 else { return nil }
+        guard force.isFinite,
+              sampleTimestamp.isFinite,
+              sampleUptime.isFinite,
+              force >= 70,
+              sampleTimestamp > 0,
+              sampleUptime >= 0 else {
+            return nil
+        }
 
         let generation: UInt64
         if currentFingerCount > 0,
@@ -158,4 +174,34 @@ final class DeviceCallbackContext: @unchecked Sendable {
         hasLoggedTouchValues = true
         return true
     }
+
+    func claimForceValueDiagnostic() -> Bool {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        guard !hasLoggedForceValues else { return false }
+        hasLoggedForceValues = true
+        return true
+    }
+}
+
+/// Shared by the private-framework callback and tests so timestamp decoding
+/// cannot silently drift away from the generation buffer again.
+@discardableResult
+func recordForceCentroidSample(
+    x: Float,
+    y: Float,
+    force: Float,
+    rawTimestamp: Double,
+    sampleUptime: Double,
+    into callbackContext: DeviceCallbackContext
+) -> UInt64? {
+    callbackContext.recordForceSample(
+        x: x,
+        y: y,
+        force: force,
+        sampleTimestamp: forceCentroidTimestampInTouchSeconds(
+            rawTimestamp
+        ),
+        sampleUptime: sampleUptime
+    )
 }

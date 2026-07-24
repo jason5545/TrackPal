@@ -764,6 +764,41 @@ final class TouchDeviceArbitrationGateTests: XCTestCase {
 }
 
 final class DeviceCallbackContextTests: XCTestCase {
+    func testForceCentroidMillisecondsDrainOnTouchTimestampScale() {
+        let context = DeviceCallbackContext(deviceID: 1)
+        let frame = context.replaceFingerCount(
+            with: 1,
+            eventTimestamp: 100,
+            eventUptime: 1_000
+        )
+
+        XCTAssertEqual(
+            recordForceCentroidSample(
+                x: 0.1,
+                y: 0.1,
+                force: 100,
+                rawTimestamp: 102_000,
+                sampleUptime: 1_002,
+                into: context
+            ),
+            frame.contactGeneration
+        )
+
+        let drained = context.takePendingForceSamples(
+            contactGeneration: frame.contactGeneration,
+            throughEventTimestamp: 102
+        )
+        XCTAssertEqual(drained.count, 1)
+        XCTAssertEqual(drained.first?.sampleTimestamp, 102)
+        XCTAssertEqual(drained.first?.force, 100)
+    }
+
+    func testInvalidForceCentroidTimestampStaysRejected() {
+        XCTAssertEqual(forceCentroidTimestampInTouchSeconds(0), 0)
+        XCTAssertEqual(forceCentroidTimestampInTouchSeconds(.nan), 0)
+        XCTAssertEqual(forceCentroidTimestampInTouchSeconds(.infinity), 0)
+    }
+
     func testFutureForceWaitsForMatchingTouchHardwareTimestamp() {
         let context = DeviceCallbackContext(deviceID: 1)
         let frame = context.replaceFingerCount(
@@ -858,6 +893,61 @@ final class DeviceCallbackContextTests: XCTestCase {
                 sampleUptime: 1_001
             )
         )
+    }
+
+    func testInvalidForceSampleCannotPoisonLaterValidThresholdBands() {
+        let context = DeviceCallbackContext(deviceID: 1)
+        let frame = context.replaceFingerCount(
+            with: 1,
+            eventTimestamp: 100,
+            eventUptime: 1_000
+        )
+
+        XCTAssertNil(
+            context.recordForceSample(
+                x: 0,
+                y: 0,
+                force: 75,
+                sampleTimestamp: 101,
+                sampleUptime: .nan
+            )
+        )
+        XCTAssertNil(
+            context.recordForceSample(
+                x: 0,
+                y: 0,
+                force: .infinity,
+                sampleTimestamp: 101,
+                sampleUptime: 1_001
+            )
+        )
+        XCTAssertEqual(
+            context.recordForceSample(
+                x: 0,
+                y: 0,
+                force: 75,
+                sampleTimestamp: 102,
+                sampleUptime: 1_002
+            ),
+            frame.contactGeneration
+        )
+        XCTAssertEqual(
+            context.recordForceSample(
+                x: 0,
+                y: 0,
+                force: 100,
+                sampleTimestamp: 103,
+                sampleUptime: 1_003
+            ),
+            frame.contactGeneration
+        )
+
+        let samples = context.takePendingForceSamples(
+            contactGeneration: frame.contactGeneration,
+            throughEventTimestamp: 103
+        )
+        XCTAssertEqual(samples.map(\.sampleTimestamp), [102, 103])
+        XCTAssertEqual(samples.map(\.force), [75, 100])
     }
 
     func testForceBufferKeepsEarliestRealSampleInEachThresholdBand() {

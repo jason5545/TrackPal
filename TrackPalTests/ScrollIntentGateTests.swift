@@ -132,6 +132,312 @@ final class ScrollIntentGateTests: XCTestCase {
         )
     }
 
+    func testRightEdgeG200OutwardPrefixCanRestartIntoVerticalActivation() {
+        var gate = ScrollIntentGate(
+            axis: .vertical,
+            configuration: .init(maxSamples: 24)
+        )
+        let outwardPrefix = Array(
+            repeating: ScrollIntentGate.Sample(
+                dx: 0.00138,
+                dy: -0.00084
+            ),
+            count: 5
+        )
+
+        for (index, sample) in outwardPrefix.enumerated() {
+            let decision = gate.observe(sample)
+            if index < outwardPrefix.count - 1 {
+                XCTAssertEqual(decision, .pending)
+            } else {
+                XCTAssertEqual(decision, .reject(reason: .offAxisDominant))
+            }
+        }
+
+        let prefixIsRecoverable = gate
+            .isRecoverableOutwardBoundaryPrefix(outwardSign: 1)
+            && ScrollIntentRecoveryPolicy.rawOutwardPrefixIsWithinBounds(
+                samples: outwardPrefix,
+                outwardSign: 1
+            )
+        XCTAssertTrue(prefixIsRecoverable)
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.shouldBeginEarlyOutwardRecovery(
+                alreadyUsed: false,
+                prefixIsRecoverable: prefixIsRecoverable
+            )
+        )
+
+        gate.reset()
+        for index in 0..<4 {
+            let decision = gate.observe(deltaX: 0, deltaY: 0.0021)
+            if index < 3 {
+                XCTAssertEqual(decision, .pending)
+            } else {
+                XCTAssertEqual(decision, .activate(axis: .vertical))
+            }
+        }
+        XCTAssertEqual(gate.acceptedSamples.count, 4)
+        XCTAssertTrue(gate.acceptedSamples.allSatisfy { $0.dx == 0 })
+    }
+
+    func testRightEdgeG202OutwardPrefixCanRestartIntoVerticalActivation() {
+        var gate = ScrollIntentGate(
+            axis: .vertical,
+            configuration: .init(maxSamples: 24)
+        )
+        let outwardPrefix = Array(
+            repeating: ScrollIntentGate.Sample(
+                dx: 0.00134,
+                dy: -0.00010
+            ),
+            count: 5
+        )
+
+        outwardPrefix.forEach { _ = gate.observe($0) }
+        XCTAssertTrue(gate.isRecoverableOutwardBoundaryPrefix(outwardSign: 1))
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.rawOutwardPrefixIsWithinBounds(
+                samples: outwardPrefix,
+                outwardSign: 1
+            )
+        )
+
+        gate.reset()
+        XCTAssertEqual(gate.observe(deltaX: 0, deltaY: 0.003), .pending)
+        XCTAssertEqual(gate.observe(deltaX: 0, deltaY: 0.003), .pending)
+        XCTAssertEqual(
+            gate.observe(deltaX: 0, deltaY: 0.003),
+            .activate(axis: .vertical)
+        )
+    }
+
+    func testRightEdgeInwardPrefixRemainsTerminalCursorMovement() {
+        var gate = ScrollIntentGate(
+            axis: .vertical,
+            configuration: .init(maxSamples: 24)
+        )
+
+        let inwardPrefix = Array(
+            repeating: ScrollIntentGate.Sample(
+                dx: -0.00138,
+                dy: -0.00084
+            ),
+            count: 5
+        )
+        inwardPrefix.forEach { _ = gate.observe($0) }
+
+        XCTAssertFalse(gate.isRecoverableOutwardBoundaryPrefix(outwardSign: 1))
+        XCTAssertFalse(
+            ScrollIntentRecoveryPolicy.rawOutwardPrefixIsWithinBounds(
+                samples: inwardPrefix,
+                outwardSign: 1
+            )
+        )
+    }
+
+    func testClearOutwardCursorMovementExceedsRecoveryCap() {
+        var gate = ScrollIntentGate(
+            axis: .vertical,
+            configuration: .init(maxSamples: 24)
+        )
+        let outwardMove = Array(
+            repeating: ScrollIntentGate.Sample(dx: 0.0035, dy: 0),
+            count: 3
+        )
+
+        outwardMove.forEach { _ = gate.observe($0) }
+
+        XCTAssertEqual(
+            gate.metrics.normalizedNetX,
+            0.0168,
+            accuracy: 0.000_001
+        )
+        XCTAssertFalse(gate.isRecoverableOutwardBoundaryPrefix(outwardSign: 1))
+        XCTAssertFalse(
+            ScrollIntentRecoveryPolicy.rawOutwardPrefixIsWithinBounds(
+                samples: outwardMove,
+                outwardSign: 1
+            )
+        )
+    }
+
+    func testWinsorizedLargeFirstFrameCannotEnterOutwardRecovery() {
+        var gate = ScrollIntentGate(
+            axis: .vertical,
+            configuration: .init(maxSamples: 24)
+        )
+        let rawPrefix: [ScrollIntentGate.Sample] = [
+            .init(dx: 0.030, dy: 0),
+            .init(dx: 0.0013, dy: 0),
+            .init(dx: 0.0013, dy: 0),
+        ]
+
+        rawPrefix.forEach { _ = gate.observe($0) }
+
+        XCTAssertTrue(gate.isRecoverableOutwardBoundaryPrefix(outwardSign: 1))
+        XCTAssertFalse(
+            ScrollIntentRecoveryPolicy.rawOutwardPrefixIsWithinBounds(
+                samples: rawPrefix,
+                outwardSign: 1
+            )
+        )
+    }
+
+    func testFoldbackPrefixCannotEnterOutwardRecovery() {
+        var gate = ScrollIntentGate(
+            axis: .vertical,
+            configuration: .init(maxSamples: 24)
+        )
+        let foldbackPrefix: [ScrollIntentGate.Sample] = [
+            .init(dx: 0.0025, dy: 0.003),
+            .init(dx: 0.0025, dy: -0.003),
+            .init(dx: 0.0025, dy: 0),
+        ]
+
+        foldbackPrefix.forEach { _ = gate.observe($0) }
+
+        XCTAssertTrue(gate.isRecoverableOutwardBoundaryPrefix(outwardSign: 1))
+        XCTAssertFalse(
+            ScrollIntentRecoveryPolicy.rawOutwardPrefixIsWithinBounds(
+                samples: foldbackPrefix,
+                outwardSign: 1
+            )
+        )
+    }
+
+    func testOutwardPrefixMustFormBeforeEarlyDeadline() {
+        let outwardPrefix = Array(
+            repeating: ScrollIntentGate.Sample(
+                dx: 0.00138,
+                dy: -0.00084
+            ),
+            count: 5
+        )
+
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.rawOutwardPrefixIsWithinBounds(
+                samples: outwardPrefix,
+                outwardSign: 1,
+                elapsed: 0.149_999
+            )
+        )
+        XCTAssertFalse(
+            ScrollIntentRecoveryPolicy.rawOutwardPrefixIsWithinBounds(
+                samples: outwardPrefix,
+                outwardSign: 1,
+                elapsed: 0.150
+            )
+        )
+        XCTAssertFalse(
+            ScrollIntentRecoveryPolicy.rawOutwardPrefixIsWithinBounds(
+                samples: outwardPrefix,
+                outwardSign: 1,
+                elapsed: 0.680
+            )
+        )
+    }
+
+    func testSubthresholdFoldbackCountsTowardRawOutwardPath() {
+        var gate = ScrollIntentGate(
+            axis: .vertical,
+            configuration: .init(maxSamples: 24)
+        )
+        let hiddenFoldback = (0..<5).flatMap { _ in
+            [
+                ScrollIntentGate.Sample(dx: 0.00030, dy: 0),
+                ScrollIntentGate.Sample(dx: -0.00030, dy: 0),
+            ]
+        }
+        let outwardPrefix = Array(
+            repeating: ScrollIntentGate.Sample(
+                dx: 0.00138,
+                dy: -0.00084
+            ),
+            count: 5
+        )
+
+        outwardPrefix.forEach { _ = gate.observe($0) }
+
+        XCTAssertTrue(gate.isRecoverableOutwardBoundaryPrefix(outwardSign: 1))
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.rawOutwardPrefixIsWithinBounds(
+                samples: outwardPrefix,
+                outwardSign: 1,
+                elapsed: 0.100
+            )
+        )
+        XCTAssertFalse(
+            ScrollIntentRecoveryPolicy.rawOutwardPrefixIsWithinBounds(
+                samples: hiddenFoldback + outwardPrefix,
+                outwardSign: 1,
+                elapsed: 0.100
+            )
+        )
+    }
+
+    func testStationaryReanchorDropsEarlierSubactivityNoise() {
+        let oldHoldNoise = (0..<100).flatMap { _ in
+            [
+                ScrollIntentGate.Sample(dx: 0.00002, dy: 0),
+                ScrollIntentGate.Sample(dx: -0.00002, dy: 0),
+            ]
+        }
+        let latestStationarySample = ScrollIntentGate.Sample(
+            dx: 0.00002,
+            dy: 0
+        )
+        let outwardPrefix = Array(
+            repeating: ScrollIntentGate.Sample(
+                dx: 0.00138,
+                dy: -0.00084
+            ),
+            count: 5
+        )
+
+        XCTAssertFalse(
+            ScrollIntentRecoveryPolicy.rawOutwardPrefixIsWithinBounds(
+                samples: oldHoldNoise + outwardPrefix,
+                outwardSign: 1,
+                elapsed: 0.040
+            )
+        )
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.rawOutwardPrefixIsWithinBounds(
+                samples: [latestStationarySample] + outwardPrefix,
+                outwardSign: 1,
+                elapsed: 0.040
+            )
+        )
+    }
+
+    func testOutwardSettlingRecoveryIsOneShotPerContact() {
+        XCTAssertFalse(
+            ScrollIntentRecoveryPolicy.shouldBeginEarlyOutwardRecovery(
+                alreadyUsed: true,
+                prefixIsRecoverable: true
+            )
+        )
+    }
+
+    func testRecoveryWindowStillRequiresFullActivationDistance() {
+        var gate = ScrollIntentGate(
+            axis: .vertical,
+            configuration: .init(maxSamples: 24)
+        )
+
+        for _ in 0..<ScrollIntentRecoveryPolicy.defaultRecoveryMaxSamples {
+            let decision = gate.observe(deltaX: 0, deltaY: 0.0003)
+            XCTAssertEqual(decision, .pending)
+        }
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.recoveryHasExpired(
+                sampleCount: gate.metrics.sampleCount,
+                elapsed: 0.100
+            )
+        )
+    }
+
     func testAcceptedSamplesPreserveFullActivationDisplacementForFlush() {
         var gate = ScrollIntentGate(axis: .vertical)
 
@@ -726,12 +1032,30 @@ final class ScrollIntentGateTests: XCTestCase {
         )
     }
 
-    func testCornerClearMovementRejectsWhenNoAdjacentAxisIsAvailable() {
-        XCTAssertEqual(
+    func testCornerInsideForceCapPreservesCandidateWhenNoAxisIsAvailable() {
+        guard case let .preserveForceCandidate(maximumExcursion) =
             ScrollIntentGate.resolveCorner(
                 samples: [
                     .init(dx: 0.004, dy: 0),
                     .init(dx: 0.004, dy: 0),
+                ],
+                availableAxes: []
+            ) else {
+            return XCTFail("Expected force candidate to survive without a scroll axis")
+        }
+
+        XCTAssertLessThan(
+            maximumExcursion,
+            ScrollIntentGate.defaultForceCandidateMaxExcursion
+        )
+    }
+
+    func testCornerAtForceCapRejectsWhenNoAxisIsAvailable() {
+        XCTAssertEqual(
+            ScrollIntentGate.resolveCorner(
+                samples: [
+                    .init(dx: 0.010, dy: 0),
+                    .init(dx: 0.005625, dy: 0),
                 ],
                 availableAxes: []
             ),
@@ -825,6 +1149,316 @@ final class ScrollIntentGateTests: XCTestCase {
                 forceCandidateMaxExcursion: 0
             ),
             .activate(axis: .horizontal)
+        )
+    }
+
+    func testAmbiguousCornerAtSafetyLimitCanBeginOneShotRecovery() {
+        let ambiguousPrefix = Array(
+            repeating: ScrollIntentGate.Sample(dx: 0.0005, dy: 0.0008),
+            count: 24
+        )
+
+        XCTAssertEqual(
+            ScrollIntentGate.resolveCorner(
+                samples: ambiguousPrefix,
+                availableAxes: [.horizontal, .vertical],
+                measuredMaximumExcursion: 0.0272
+            ),
+            .awaitMoreScrollEvidence(maximumExcursion: 0.0272)
+        )
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.shouldBeginCornerRecovery(
+                alreadyUsed: false,
+                resolutionIsAwaitingMoreEvidence: true,
+                isEligibleContact: true,
+                availableAxisCount: 2,
+                sampleCount: 24,
+                initialSampleLimit: 24,
+                maximumExcursion: 0.0272,
+                forceCandidateMaximumExcursion: 0.025,
+                hasTriggeringForceCandidate: false
+            )
+        )
+    }
+
+    func testCornerRecoveryUsesOnlyFreshSuffixForActivation() {
+        let ambiguousPrefix = Array(
+            repeating: ScrollIntentGate.Sample(dx: 0.0005, dy: 0.0008),
+            count: 24
+        )
+        let verticalSuffix = Array(
+            repeating: ScrollIntentGate.Sample(dx: 0.0001, dy: 0.003),
+            count: 3
+        )
+
+        XCTAssertEqual(
+            ScrollIntentGate.resolveCorner(
+                samples: verticalSuffix,
+                availableAxes: [.horizontal, .vertical],
+                forceCandidateMaxExcursion: 0
+            ),
+            .activate(axis: .vertical)
+        )
+        guard case .awaitMoreScrollEvidence = ScrollIntentGate.resolveCorner(
+            samples: ambiguousPrefix + verticalSuffix,
+            availableAxes: [.horizontal, .vertical],
+            forceCandidateMaxExcursion: 0,
+            measuredMaximumExcursion: 0.0272
+        ) else {
+            return XCTFail("Old ambiguous prefix must not be replayed into recovery")
+        }
+    }
+
+    func testCornerRecoveryPolicyRejectsUnsafeEntryConditions() {
+        func shouldBegin(
+            alreadyUsed: Bool = false,
+            resolutionIsAwaiting: Bool = true,
+            isEligibleContact: Bool = true,
+            axisCount: Int = 2,
+            sampleCount: Int = 24,
+            maximumExcursion: CGFloat = 0.0272,
+            hasTriggeringForce: Bool = false
+        ) -> Bool {
+            ScrollIntentRecoveryPolicy.shouldBeginCornerRecovery(
+                alreadyUsed: alreadyUsed,
+                resolutionIsAwaitingMoreEvidence: resolutionIsAwaiting,
+                isEligibleContact: isEligibleContact,
+                availableAxisCount: axisCount,
+                sampleCount: sampleCount,
+                initialSampleLimit: 24,
+                maximumExcursion: maximumExcursion,
+                forceCandidateMaximumExcursion: 0.025,
+                hasTriggeringForceCandidate: hasTriggeringForce
+            )
+        }
+
+        XCTAssertFalse(shouldBegin(alreadyUsed: true))
+        XCTAssertFalse(shouldBegin(resolutionIsAwaiting: false))
+        XCTAssertFalse(shouldBegin(isEligibleContact: false))
+        XCTAssertFalse(shouldBegin(axisCount: 0))
+        XCTAssertFalse(shouldBegin(sampleCount: 23))
+        XCTAssertTrue(shouldBegin(sampleCount: 25))
+        XCTAssertFalse(shouldBegin(maximumExcursion: 0.024_999))
+        XCTAssertFalse(shouldBegin(hasTriggeringForce: true))
+    }
+
+    func testCornerCanBeginRecoveryWhenForceCapCrossesAfterSampleLimit() {
+        let ambiguousSamples = Array(
+            repeating: ScrollIntentGate.Sample(dx: 0.00045, dy: 0.00072),
+            count: 25
+        )
+
+        XCTAssertEqual(
+            ScrollIntentGate.resolveCorner(
+                samples: Array(ambiguousSamples.prefix(24)),
+                availableAxes: [.horizontal, .vertical],
+                measuredMaximumExcursion: 0.024_9
+            ),
+            .preserveForceCandidate(maximumExcursion: 0.024_9)
+        )
+        XCTAssertEqual(
+            ScrollIntentGate.resolveCorner(
+                samples: ambiguousSamples,
+                availableAxes: [.horizontal, .vertical],
+                measuredMaximumExcursion: 0.026
+            ),
+            .awaitMoreScrollEvidence(maximumExcursion: 0.026)
+        )
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.shouldBeginCornerRecovery(
+                alreadyUsed: false,
+                resolutionIsAwaitingMoreEvidence: true,
+                isEligibleContact: true,
+                availableAxisCount: 2,
+                sampleCount: 25,
+                initialSampleLimit: 24,
+                maximumExcursion: 0.026,
+                forceCandidateMaximumExcursion: 0.025,
+                hasTriggeringForceCandidate: false
+            )
+        )
+    }
+
+    func testSixteenthRecoverySampleMayConfirmButCannotStayPending() {
+        let firstFifteen = Array(
+            repeating: ScrollIntentGate.Sample(dx: 0.00032, dy: 0),
+            count: 15
+        )
+        let sixteenth = ScrollIntentGate.Sample(dx: 0.00032, dy: 0)
+
+        guard case .awaitMoreScrollEvidence = ScrollIntentGate.resolveCorner(
+            samples: firstFifteen,
+            availableAxes: [.horizontal, .vertical],
+            forceCandidateMaxExcursion: 0
+        ) else {
+            return XCTFail("The 15th recovery sample must still be pending")
+        }
+        XCTAssertFalse(
+            ScrollIntentRecoveryPolicy.recoveryHasExpired(
+                sampleCount: 15,
+                elapsed: 0.100
+            )
+        )
+        XCTAssertEqual(
+            ScrollIntentGate.resolveCorner(
+                samples: firstFifteen + [sixteenth],
+                availableAxes: [.horizontal, .vertical],
+                forceCandidateMaxExcursion: 0
+            ),
+            .activate(axis: .horizontal)
+        )
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.recoveryHasExpired(
+                sampleCount: 16,
+                elapsed: 0.100
+            )
+        )
+    }
+
+    func testCornerRecoveryRequiresThirdFreshConfirmationSample() {
+        let twoFrameSuffix: [ScrollIntentGate.Sample] = [
+            .init(dx: 0.0025, dy: 0),
+            .init(dx: 0.0025, dy: 0),
+        ]
+
+        XCTAssertEqual(
+            ScrollIntentGate.resolveCorner(
+                samples: twoFrameSuffix,
+                availableAxes: [.horizontal, .vertical],
+                forceCandidateMaxExcursion: 0
+            ),
+            .activate(axis: .horizontal)
+        )
+        XCTAssertFalse(
+            ScrollIntentRecoveryPolicy.cornerRecoveryCanActivate(
+                freshSampleCount: 2
+            )
+        )
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.cornerRecoveryCanActivate(
+                freshSampleCount: 3
+            )
+        )
+    }
+
+    func testCornerRecoveryHasStrictSampleAndTimeBoundaries() {
+        XCTAssertFalse(
+            ScrollIntentRecoveryPolicy.recoveryHasExpired(
+                sampleCount: 15,
+                elapsed: 0.149_999
+            )
+        )
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.recoveryHasExpired(
+                sampleCount: 16,
+                elapsed: 0
+            )
+        )
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.recoveryHasExpired(
+                sampleCount: 0,
+                elapsed: 0.150
+            )
+        )
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.recoveryHasExpired(
+                sampleCount: 0,
+                elapsed: .nan
+            )
+        )
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.recoveryHasExpired(
+                sampleCount: 0,
+                elapsed: -0.001
+            )
+        )
+    }
+
+    func testRecoveryAndScrollOnlyCornerExpireOnEvidenceGap() {
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.isScrollOnlyCornerDecision(
+                isCorner: true,
+                hasActiveForceCandidate: false,
+                forceGestureDisqualified: false,
+                maximumExcursion: 0.010,
+                forceCandidateMaximumExcursion: 0.025
+            )
+        )
+        XCTAssertFalse(
+            ScrollIntentRecoveryPolicy.isScrollOnlyCornerDecision(
+                isCorner: true,
+                hasActiveForceCandidate: true,
+                forceGestureDisqualified: false,
+                maximumExcursion: 0.024_999,
+                forceCandidateMaximumExcursion: 0.025
+            )
+        )
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.isScrollOnlyCornerDecision(
+                isCorner: true,
+                hasActiveForceCandidate: true,
+                forceGestureDisqualified: false,
+                maximumExcursion: 0.025,
+                forceCandidateMaximumExcursion: 0.025
+            )
+        )
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.shouldExpireOnEvidenceGap(
+                hasActiveRecovery: true,
+                isScrollOnlyCorner: false
+            )
+        )
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.shouldExpireOnEvidenceGap(
+                hasActiveRecovery: false,
+                isScrollOnlyCorner: true
+            )
+        )
+        XCTAssertFalse(
+            ScrollIntentRecoveryPolicy.shouldExpireOnEvidenceGap(
+                hasActiveRecovery: false,
+                isScrollOnlyCorner: false
+            )
+        )
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.recoveryHasExpired(
+                sampleCount: 0,
+                elapsed: 0.181
+            )
+        )
+    }
+
+    func testAmbiguousCornerCannotLoopPastRecoveryWindow() {
+        let diagonalRecovery = Array(
+            repeating: ScrollIntentGate.Sample(dx: 0.0005, dy: 0.0008),
+            count: 16
+        )
+
+        guard case .awaitMoreScrollEvidence = ScrollIntentGate.resolveCorner(
+            samples: diagonalRecovery,
+            availableAxes: [.horizontal, .vertical],
+            forceCandidateMaxExcursion: 0
+        ) else {
+            return XCTFail("A balanced diagonal must remain ambiguous")
+        }
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.recoveryHasExpired(
+                sampleCount: diagonalRecovery.count,
+                elapsed: 0.100
+            )
+        )
+        XCTAssertFalse(
+            ScrollIntentRecoveryPolicy.shouldBeginCornerRecovery(
+                alreadyUsed: true,
+                resolutionIsAwaitingMoreEvidence: true,
+                isEligibleContact: true,
+                availableAxisCount: 2,
+                sampleCount: 24,
+                initialSampleLimit: 24,
+                maximumExcursion: 0.040,
+                forceCandidateMaximumExcursion: 0.025,
+                hasTriggeringForceCandidate: false
+            )
         )
     }
 }
