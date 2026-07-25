@@ -160,8 +160,11 @@ struct TouchExcursionTimeline {
 /// excursion remains visible to the force gate and diagnostics.
 struct CornerForceCrossingGrace {
     static let defaultBaseMaximumExcursion: CGFloat = 0.025
-    static let defaultAcceptanceWindow: Double = 0.060
-    static let defaultDecisionHoldWindow: Double = 0.080
+    // The force stream can trail the touch stream by roughly 150 ms while the
+    // finger ramps through standard pressure. Keep hardware-time acceptance
+    // bounded, then leave a small margin for callback delivery.
+    static let defaultAcceptanceWindow: Double = 0.155
+    static let defaultDecisionHoldWindow: Double = 0.165
     static let defaultMaximumCrossingExcursion: CGFloat = 0.030
     static let defaultMaximumExcursionAtForce: CGFloat = 0.050
 
@@ -267,6 +270,39 @@ struct CornerForceCrossingGrace {
             && hardwareElapsed < decisionHoldWindow
             && arrivalElapsed >= 0
             && arrivalElapsed < decisionHoldWindow
+    }
+
+    /// A rejected sample inside the bounded crossing envelope is terminal for
+    /// that sample, not necessarily for the whole gesture. Retire it so a new
+    /// sensor sample can be evaluated, while preserving every original force,
+    /// movement, timing, and axis boundary for the replacement.
+    func shouldAwaitReplacementCandidate(
+        hasAvailableScrollAxis: Bool,
+        rejectedMovement: CGFloat,
+        currentMaximumExcursion: CGFloat,
+        touchDuration: Double,
+        maximumTouchDuration: Double,
+        atTouchTimestamp touchTimestamp: Double,
+        decisionUptime: Double
+    ) -> Bool {
+        guard rejectedMovement.isFinite,
+              rejectedMovement >= baseMaximumExcursion,
+              currentMaximumExcursion.isFinite,
+              currentMaximumExcursion >= rejectedMovement,
+              currentMaximumExcursion < maximumExcursionAtForce,
+              touchDuration.isFinite,
+              touchDuration >= 0,
+              maximumTouchDuration.isFinite,
+              maximumTouchDuration > 0,
+              touchDuration < maximumTouchDuration else {
+            return false
+        }
+
+        return shouldHoldDecision(
+            hasAvailableScrollAxis: hasAvailableScrollAxis,
+            atTouchTimestamp: touchTimestamp,
+            decisionUptime: decisionUptime
+        )
     }
 
     private var hasValidCrossing: Bool {

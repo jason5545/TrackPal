@@ -283,6 +283,202 @@ final class ForcePressActionGateTests: XCTestCase {
         )
     }
 
+    func testCornerCrossingGraceCoversObservedLateStandardForceRamp() {
+        let grace = makeCornerGrace(
+            beforeCrossing: 0.0248,
+            atCrossing: 0.0262
+        )
+
+        let policy = movementPolicy(
+            grace: grace,
+            force: 100,
+            forceTimestamp: 0.104,
+            forceSampleUptime: 0.107,
+            observedMaximumExcursion: 0.038
+        )
+
+        XCTAssertTrue(policy.usedLateStandardForceGrace)
+        XCTAssertEqual(policy.maximumAllowedExcursion, 0.05, accuracy: 0.0001)
+        XCTAssertEqual(
+            policy.hardwareDelayAfterCrossing ?? 0,
+            0.104,
+            accuracy: 0.000_001
+        )
+        XCTAssertEqual(
+            policy.arrivalDelayAfterCrossing ?? 0,
+            0.107,
+            accuracy: 0.000_001
+        )
+    }
+
+    func testCornerCrossingGraceWaitsForNextStandardSampleInG82Sequence() {
+        let grace = makeCornerGrace(
+            beforeCrossing: 0.0238,
+            atCrossing: 0.0256
+        )
+
+        let assistedPolicy = movementPolicy(
+            grace: grace,
+            force: 70,
+            forceTimestamp: 0.136,
+            forceSampleUptime: 0.139,
+            observedMaximumExcursion: 0.038
+        )
+        XCTAssertFalse(assistedPolicy.usedLateStandardForceGrace)
+        XCTAssertTrue(grace.shouldHoldDecision(
+            hasAvailableScrollAxis: false,
+            atTouchTimestamp: 0.136,
+            decisionUptime: 0.139
+        ))
+
+        let standardPolicy = movementPolicy(
+            grace: grace,
+            force: 100,
+            forceTimestamp: 0.152,
+            forceSampleUptime: 0.155,
+            observedMaximumExcursion: 0.042
+        )
+        XCTAssertTrue(standardPolicy.usedLateStandardForceGrace)
+
+        let decision = ForcePressActionGate(
+            maxMovementBeforeForce: standardPolicy.maximumAllowedExcursion
+        ).evaluateForce(
+            force: 100,
+            standardThreshold: 100,
+            assistedThreshold: 70,
+            maximumTouchExcursion: standardPolicy.observedMaximumExcursion,
+            touchDuration: 0.2
+        )
+
+        guard case let .trigger(source, observedMovement) = decision else {
+            return XCTFail("Expected the next standard sample to trigger")
+        }
+        XCTAssertEqual(source, .standard)
+        XCTAssertEqual(observedMovement, 0.042, accuracy: 0.0001)
+    }
+
+    func testCornerCrossingGraceDefersG268RejectionForReplacementStandardSample() {
+        let grace = makeCornerGrace(
+            beforeCrossing: 0.0228,
+            atCrossing: 0.0263
+        )
+        let rejectedMovement: CGFloat = 0.0384
+        let earlyDecision = ForcePressActionGate(
+            maxMovementBeforeForce: 0.025
+        ).evaluateForce(
+            force: 100,
+            standardThreshold: 100,
+            assistedThreshold: 70,
+            maximumTouchExcursion: rejectedMovement,
+            touchDuration: 0.172
+        )
+
+        guard case let .reject(
+            reason: .movedTooFarBeforeForce,
+            movementBeforeForce: earlyRejectedMovement
+        ) = earlyDecision else {
+            return XCTFail("Expected the early G268 candidate to be non-triggering")
+        }
+        XCTAssertEqual(earlyRejectedMovement, rejectedMovement, accuracy: 0.0001)
+        XCTAssertTrue(grace.shouldAwaitReplacementCandidate(
+            hasAvailableScrollAxis: false,
+            rejectedMovement: rejectedMovement,
+            currentMaximumExcursion: rejectedMovement,
+            touchDuration: 0.172,
+            maximumTouchDuration: 1.0,
+            atTouchTimestamp: 0.066,
+            decisionUptime: 0.066
+        ))
+
+        let replacementPolicy = movementPolicy(
+            grace: grace,
+            force: 113,
+            forceTimestamp: 0.080,
+            forceSampleUptime: 0.082,
+            observedMaximumExcursion: 0.045
+        )
+        XCTAssertTrue(replacementPolicy.usedLateStandardForceGrace)
+
+        let replacementDecision = ForcePressActionGate(
+            maxMovementBeforeForce: replacementPolicy.maximumAllowedExcursion
+        ).evaluateForce(
+            force: 113,
+            standardThreshold: 100,
+            assistedThreshold: 70,
+            maximumTouchExcursion: replacementPolicy.observedMaximumExcursion,
+            touchDuration: 0.186
+        )
+        guard case let .trigger(source, movement) = replacementDecision else {
+            return XCTFail("Expected the replacement standard sample to trigger")
+        }
+        XCTAssertEqual(source, .standard)
+        XCTAssertEqual(movement, 0.045, accuracy: 0.0001)
+    }
+
+    func testCornerCrossingGraceReplacementWaitKeepsSafetyBoundaries() {
+        let grace = makeCornerGrace()
+
+        func shouldAwait(
+            hasAvailableScrollAxis: Bool = false,
+            rejectedMovement: CGFloat = 0.0384,
+            currentMaximumExcursion: CGFloat = 0.0384,
+            touchDuration: Double = 0.2,
+            touchTimestamp: Double = 0.080,
+            decisionUptime: Double = 0.082
+        ) -> Bool {
+            grace.shouldAwaitReplacementCandidate(
+                hasAvailableScrollAxis: hasAvailableScrollAxis,
+                rejectedMovement: rejectedMovement,
+                currentMaximumExcursion: currentMaximumExcursion,
+                touchDuration: touchDuration,
+                maximumTouchDuration: 1.0,
+                atTouchTimestamp: touchTimestamp,
+                decisionUptime: decisionUptime
+            )
+        }
+
+        XCTAssertTrue(shouldAwait())
+        XCTAssertFalse(shouldAwait(hasAvailableScrollAxis: true))
+        XCTAssertFalse(shouldAwait(currentMaximumExcursion: 0.050))
+        XCTAssertFalse(shouldAwait(touchDuration: 1.0))
+        XCTAssertFalse(shouldAwait(
+            touchTimestamp: CornerForceCrossingGrace.defaultDecisionHoldWindow
+        ))
+        XCTAssertFalse(shouldAwait(
+            decisionUptime: CornerForceCrossingGrace.defaultDecisionHoldWindow
+        ))
+
+        let invalidCrossing = CornerForceCrossingGrace(
+            crossingTimestamp: 0,
+            crossingArrivalUptime: 0,
+            maximumExcursionBeforeCrossing: 0.024,
+            maximumExcursionAtCrossing: 0.030
+        )
+        XCTAssertFalse(invalidCrossing.shouldAwaitReplacementCandidate(
+            hasAvailableScrollAxis: false,
+            rejectedMovement: 0.0384,
+            currentMaximumExcursion: 0.0384,
+            touchDuration: 0.2,
+            maximumTouchDuration: 1.0,
+            atTouchTimestamp: 0.080,
+            decisionUptime: 0.082
+        ))
+    }
+
+    func testCornerCrossingGraceStillRejectsLateRampWithScrollAxis() {
+        let policy = movementPolicy(
+            grace: makeCornerGrace(),
+            hasAvailableScrollAxis: true,
+            force: 180,
+            forceTimestamp: 0.104,
+            forceSampleUptime: 0.107,
+            observedMaximumExcursion: 0.038
+        )
+
+        XCTAssertFalse(policy.usedLateStandardForceGrace)
+        XCTAssertEqual(policy.maximumAllowedExcursion, 0.025, accuracy: 0.0001)
+    }
+
     func testCornerCrossingGraceKeepsObservedMovementVisibleToGate() {
         let policy = movementPolicy(
             grace: makeCornerGrace(),
@@ -463,6 +659,16 @@ final class ForcePressActionGateTests: XCTestCase {
             hasAvailableScrollAxis: true,
             atTouchTimestamp: 0.001,
             decisionUptime: 0.001
+        ))
+    }
+
+    func testCornerCrossingGraceHoldsThroughObservedLateForceArrival() {
+        let grace = makeCornerGrace()
+
+        XCTAssertTrue(grace.shouldHoldDecision(
+            hasAvailableScrollAxis: false,
+            atTouchTimestamp: 0.104,
+            decisionUptime: 0.107
         ))
     }
 

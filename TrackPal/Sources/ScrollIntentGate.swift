@@ -250,7 +250,7 @@ struct ScrollIntentGate {
             provisionalInitialContradictsAxis && observationCount < 3
         if metrics.sampleCount >= 2,
            !needsThirdSampleForInitialContradiction,
-           qualifiesForStandardActivation {
+           qualifiesForActivationAtCurrentSampleCount {
             return finish(with: .activate(axis: axis))
         }
 
@@ -573,9 +573,21 @@ struct ScrollIntentGate {
         return nil
     }
 
-    private var qualifiesForStandardActivation: Bool {
-        metrics.onAxisNet(for: axis) >= configuration.activationDisplacement
-            && metrics.axisDominance(for: axis) >= configuration.activationDominance
+    /// Two samples are enough only for an unambiguously fast gesture. A normal
+    /// threshold crossing needs one more valid sample, which gives the touch
+    /// filter a frame to expose a contact that is growing into a palm/large
+    /// touch before any buffered scroll is emitted.
+    private var qualifiesForActivationAtCurrentSampleCount: Bool {
+        let usesFastThresholds = metrics.sampleCount == 2
+        let requiredDisplacement = usesFastThresholds
+            ? configuration.fastActivationDisplacement
+            : configuration.activationDisplacement
+        let requiredDominance = usesFastThresholds
+            ? configuration.fastActivationDominance
+            : configuration.activationDominance
+
+        return metrics.onAxisNet(for: axis) >= requiredDisplacement
+            && metrics.axisDominance(for: axis) >= requiredDominance
             && metrics.axisCoherence(for: axis) >= configuration.minimumAxisCoherence
             && metrics.pathCoherence >= configuration.minimumPathCoherence
     }

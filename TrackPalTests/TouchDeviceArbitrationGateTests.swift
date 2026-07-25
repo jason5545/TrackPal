@@ -764,6 +764,303 @@ final class TouchDeviceArbitrationGateTests: XCTestCase {
 }
 
 final class DeviceCallbackContextTests: XCTestCase {
+    func testSubthresholdForceOnlyUpdatesRawDiagnostic() {
+        let context = DeviceCallbackContext(deviceID: 1)
+        let frame = context.replaceFingerCount(
+            with: 1,
+            eventTimestamp: 100,
+            eventUptime: 1_000
+        )
+
+        for (force, timestamp) in [(12.0, 101.0), (48.0, 102.0), (69.0, 103.0)] {
+            XCTAssertNil(
+                context.recordForceSample(
+                    x: 0.1,
+                    y: 0.1,
+                    force: Float(force),
+                    sampleTimestamp: timestamp,
+                    sampleUptime: 900 + timestamp
+                )
+            )
+        }
+
+        XCTAssertTrue(
+            context.takePendingForceSamples(
+                contactGeneration: frame.contactGeneration,
+                throughEventTimestamp: 103
+            ).isEmpty
+        )
+        XCTAssertEqual(
+            context.takePendingRawForceDiagnostic(
+                contactGeneration: frame.contactGeneration,
+                throughEventTimestamp: 103
+            ),
+            RawForceDiagnostic(sampleCount: 3, maximumForce: 69)
+        )
+    }
+
+    func testRawForceDiagnosticHonorsHardwareTimestampCutoff() {
+        let context = DeviceCallbackContext(deviceID: 1)
+        let frame = context.replaceFingerCount(
+            with: 1,
+            eventTimestamp: 100,
+            eventUptime: 1_000
+        )
+
+        _ = context.recordForceSample(
+            x: 0,
+            y: 0,
+            force: 40,
+            sampleTimestamp: 102,
+            sampleUptime: 1_002
+        )
+        _ = context.recordForceSample(
+            x: 0,
+            y: 0,
+            force: 60,
+            sampleTimestamp: 104,
+            sampleUptime: 1_004
+        )
+
+        XCTAssertEqual(
+            context.takePendingRawForceDiagnostic(
+                contactGeneration: frame.contactGeneration,
+                throughEventTimestamp: 103
+            ),
+            RawForceDiagnostic(sampleCount: 1, maximumForce: 40)
+        )
+        XCTAssertEqual(
+            context.takePendingRawForceDiagnostic(
+                contactGeneration: frame.contactGeneration,
+                throughEventTimestamp: 104
+            ),
+            RawForceDiagnostic(sampleCount: 1, maximumForce: 60)
+        )
+    }
+
+    func testSubthresholdTelemetryDoesNotChangeActionThresholdTiers() {
+        let context = DeviceCallbackContext(deviceID: 1)
+        let frame = context.replaceFingerCount(
+            with: 1,
+            eventTimestamp: 100,
+            eventUptime: 1_000
+        )
+
+        for (force, timestamp) in [(69.0, 101.0), (70.0, 102.0), (68.0, 103.0), (100.0, 104.0)] {
+            _ = context.recordForceSample(
+                x: 0,
+                y: 0,
+                force: Float(force),
+                sampleTimestamp: timestamp,
+                sampleUptime: 900 + timestamp
+            )
+        }
+
+        let actionSamples = context.takePendingForceSamples(
+            contactGeneration: frame.contactGeneration,
+            throughEventTimestamp: 104
+        )
+        XCTAssertEqual(actionSamples.map(\.force), [70, 100])
+        XCTAssertEqual(
+            context.takePendingRawForceDiagnostic(
+                contactGeneration: frame.contactGeneration,
+                throughEventTimestamp: 104
+            ),
+            RawForceDiagnostic(sampleCount: 4, maximumForce: 100)
+        )
+    }
+
+    func testRawForceDiagnosticIsDiscardedWithItsGeneration() {
+        let context = DeviceCallbackContext(deviceID: 1)
+        let first = context.replaceFingerCount(
+            with: 1,
+            eventTimestamp: 100,
+            eventUptime: 1_000
+        )
+        _ = context.recordForceSample(
+            x: 0,
+            y: 0,
+            force: 68,
+            sampleTimestamp: 105,
+            sampleUptime: 1_005
+        )
+        _ = context.replaceFingerCount(
+            with: 0,
+            eventTimestamp: 110,
+            eventUptime: 1_010
+        )
+        context.discardPendingForceSamples(
+            contactGeneration: first.contactGeneration
+        )
+
+        let second = context.replaceFingerCount(
+            with: 1,
+            eventTimestamp: 120,
+            eventUptime: 1_020
+        )
+        XCTAssertNil(
+            context.takePendingRawForceDiagnostic(
+                contactGeneration: first.contactGeneration,
+                throughEventTimestamp: 130
+            )
+        )
+        XCTAssertNil(
+            context.takePendingRawForceDiagnostic(
+                contactGeneration: second.contactGeneration,
+                throughEventTimestamp: 130
+            )
+        )
+    }
+
+    func testFinalizedPayloadKeepsRawAndActionEvidenceAtomic() {
+        let context = DeviceCallbackContext(deviceID: 1)
+        let frame = context.replaceFingerCount(
+            with: 1,
+            eventTimestamp: 100,
+            eventUptime: 1_000
+        )
+        _ = context.recordForceSample(
+            x: 0,
+            y: 0,
+            force: 68,
+            sampleTimestamp: 105,
+            sampleUptime: 1_005
+        )
+        _ = context.recordForceSample(
+            x: 0,
+            y: 0,
+            force: 70,
+            sampleTimestamp: 106,
+            sampleUptime: 1_006
+        )
+        _ = context.replaceFingerCount(
+            with: 0,
+            eventTimestamp: 110,
+            eventUptime: 1_010
+        )
+
+        let payload = context.finalizePendingForcePayload(
+            contactGeneration: frame.contactGeneration,
+            throughEventTimestamp: 110
+        )
+        XCTAssertEqual(payload.actionSamples.map(\.force), [70])
+        XCTAssertEqual(
+            payload.rawDiagnostic,
+            RawForceDiagnostic(sampleCount: 2, maximumForce: 70)
+        )
+        XCTAssertTrue(
+            context.takePendingForceSamples(
+                contactGeneration: frame.contactGeneration,
+                throughEventTimestamp: 110
+            ).isEmpty
+        )
+        XCTAssertNil(
+            context.takePendingRawForceDiagnostic(
+                contactGeneration: frame.contactGeneration,
+                throughEventTimestamp: 110
+            )
+        )
+    }
+
+    func testFinalizedPayloadExcludesFutureTimestampEvidence() {
+        let context = DeviceCallbackContext(deviceID: 1)
+        let frame = context.replaceFingerCount(
+            with: 1,
+            eventTimestamp: 100,
+            eventUptime: 1_000
+        )
+        _ = context.recordForceSample(
+            x: 0,
+            y: 0,
+            force: 65,
+            sampleTimestamp: 109,
+            sampleUptime: 1_009
+        )
+        _ = context.recordForceSample(
+            x: 0,
+            y: 0,
+            force: 100,
+            sampleTimestamp: 111,
+            sampleUptime: 1_011
+        )
+        _ = context.replaceFingerCount(
+            with: 0,
+            eventTimestamp: 110,
+            eventUptime: 1_010
+        )
+
+        let payload = context.finalizePendingForcePayload(
+            contactGeneration: frame.contactGeneration,
+            throughEventTimestamp: 110
+        )
+        XCTAssertTrue(payload.actionSamples.isEmpty)
+        XCTAssertEqual(
+            payload.rawDiagnostic,
+            RawForceDiagnostic(sampleCount: 1, maximumForce: 65)
+        )
+    }
+
+    func testRawForceCompactionPreservesTerminalCountAndPeak() {
+        let context = DeviceCallbackContext(deviceID: 1)
+        let frame = context.replaceFingerCount(
+            with: 1,
+            eventTimestamp: 100,
+            eventUptime: 1_000
+        )
+
+        for index in 0..<4_100 {
+            _ = context.recordForceSample(
+                x: 0,
+                y: 0,
+                force: Float(index % 200),
+                sampleTimestamp: 101 + Double(index) / 1_000,
+                sampleUptime: 1_001 + Double(index) / 1_000
+            )
+        }
+
+        XCTAssertEqual(
+            context.takePendingRawForceDiagnostic(
+                contactGeneration: frame.contactGeneration,
+                throughEventTimestamp: 110
+            ),
+            RawForceDiagnostic(sampleCount: 4_100, maximumForce: 199)
+        )
+    }
+
+    func testInvalidRawForceSamplesDoNotPolluteDiagnosticOrActionBuffer() {
+        let context = DeviceCallbackContext(deviceID: 1)
+        let frame = context.replaceFingerCount(
+            with: 1,
+            eventTimestamp: 100,
+            eventUptime: 1_000
+        )
+
+        for force in [Float.nan, .infinity, -1] {
+            XCTAssertNil(
+                context.recordForceSample(
+                    x: 0,
+                    y: 0,
+                    force: force,
+                    sampleTimestamp: 101,
+                    sampleUptime: 1_001
+                )
+            )
+        }
+
+        XCTAssertNil(
+            context.takePendingRawForceDiagnostic(
+                contactGeneration: frame.contactGeneration,
+                throughEventTimestamp: 101
+            )
+        )
+        XCTAssertTrue(
+            context.takePendingForceSamples(
+                contactGeneration: frame.contactGeneration,
+                throughEventTimestamp: 101
+            ).isEmpty
+        )
+    }
+
     func testForceCentroidMillisecondsDrainOnTouchTimestampScale() {
         let context = DeviceCallbackContext(deviceID: 1)
         let frame = context.replaceFingerCount(
@@ -950,7 +1247,7 @@ final class DeviceCallbackContextTests: XCTestCase {
         XCTAssertEqual(samples.map(\.force), [75, 100])
     }
 
-    func testForceBufferKeepsEarliestRealSampleInEachThresholdBand() {
+    func testForceBufferKeepsTierEndpointsWithoutOverwritingEarliestSample() {
         let context = DeviceCallbackContext(deviceID: 1)
         let frame = context.replaceFingerCount(
             with: 1,
@@ -993,7 +1290,38 @@ final class DeviceCallbackContextTests: XCTestCase {
             contactGeneration: frame.contactGeneration,
             throughEventTimestamp: 200
         )
-        XCTAssertEqual(samples.map(\.sampleTimestamp), [103, 104])
-        XCTAssertEqual(samples.map(\.force), [75, 100])
+        XCTAssertEqual(samples.map(\.sampleTimestamp), [103, 104, 175])
+        XCTAssertEqual(samples.map(\.force), [75, 100, 70])
+    }
+
+    func testForceBufferKeepsG268ReplacementInSameStandardTier() {
+        let context = DeviceCallbackContext(deviceID: 1)
+        let frame = context.replaceFingerCount(
+            with: 1,
+            eventTimestamp: 100,
+            eventUptime: 1_000
+        )
+
+        _ = context.recordForceSample(
+            x: 0,
+            y: 0,
+            force: 100,
+            sampleTimestamp: 100.066,
+            sampleUptime: 1_000.066
+        )
+        _ = context.recordForceSample(
+            x: 0,
+            y: 0,
+            force: 113,
+            sampleTimestamp: 100.080,
+            sampleUptime: 1_000.082
+        )
+
+        let samples = context.takePendingForceSamples(
+            contactGeneration: frame.contactGeneration,
+            throughEventTimestamp: 100.100
+        )
+        XCTAssertEqual(samples.map(\.sampleTimestamp), [100.066, 100.080])
+        XCTAssertEqual(samples.map(\.force), [100, 113])
     }
 }

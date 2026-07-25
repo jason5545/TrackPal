@@ -2,9 +2,10 @@ import CoreGraphics
 import XCTest
 
 final class ScrollIntentGateTests: XCTestCase {
-    func testHorizontalIntentNeedsTwoOrdinarySamples() {
+    func testHorizontalOrdinaryIntentNeedsThreeSamples() {
         var gate = ScrollIntentGate(axis: .horizontal)
 
+        XCTAssertEqual(gate.observe(deltaX: 0.003, deltaY: 0.0004), .pending)
         XCTAssertEqual(gate.observe(deltaX: 0.003, deltaY: 0.0004), .pending)
         XCTAssertEqual(
             gate.observe(deltaX: 0.003, deltaY: 0.0004),
@@ -12,12 +13,85 @@ final class ScrollIntentGateTests: XCTestCase {
         )
     }
 
-    func testVerticalIntentNeedsTwoOrdinarySamples() {
+    func testVerticalOrdinaryIntentNeedsThreeSamples() {
         var gate = ScrollIntentGate(axis: .vertical)
 
         XCTAssertEqual(gate.observe(deltaX: 0.0002, deltaY: -0.0045), .pending)
+        XCTAssertEqual(gate.observe(deltaX: 0.0002, deltaY: -0.0045), .pending)
         XCTAssertEqual(
             gate.observe(deltaX: 0.0002, deltaY: -0.0045),
+            .activate(axis: .vertical)
+        )
+    }
+
+    func testG60SizedTwoSampleVerticalTraceWaitsForThirdValidSample() {
+        var gate = ScrollIntentGate(axis: .vertical)
+
+        XCTAssertEqual(gate.observe(deltaX: 0.00065, deltaY: -0.0064), .pending)
+        XCTAssertEqual(gate.observe(deltaX: 0.00065, deltaY: -0.0064), .pending)
+        XCTAssertEqual(gate.metrics.netY, -0.0128, accuracy: 0.000_001)
+        XCTAssertEqual(
+            gate.observe(deltaX: 0.0001, deltaY: -0.0005),
+            .activate(axis: .vertical)
+        )
+    }
+
+    func testInvalidTouchBoundaryPreventsReleaseTailFromConfirmingOldTrace() {
+        var gate = ScrollIntentGate(axis: .vertical)
+
+        XCTAssertEqual(gate.observe(deltaX: 0.00065, deltaY: -0.0064), .pending)
+        XCTAssertEqual(gate.observe(deltaX: 0.00065, deltaY: -0.0064), .pending)
+
+        // Runtime resets pending evidence as soon as filtering reports an
+        // invalid frame. A later lifting tail is therefore a new provisional
+        // first sample, not confirmation for the pre-invalid trace.
+        gate.reset()
+        XCTAssertEqual(gate.observe(deltaX: 0, deltaY: -0.010), .pending)
+        XCTAssertEqual(gate.observationCount, 1)
+        XCTAssertEqual(gate.metrics.sampleCount, 0)
+        XCTAssertTrue(gate.acceptedSamples.isEmpty)
+    }
+
+    func testStrongTwoSampleVerticalTraceStillActivatesImmediately() {
+        var gate = ScrollIntentGate(axis: .vertical)
+
+        XCTAssertEqual(gate.observe(deltaX: 0, deltaY: -0.009), .pending)
+        XCTAssertEqual(
+            gate.observe(deltaX: 0, deltaY: -0.009),
+            .activate(axis: .vertical)
+        )
+        XCTAssertEqual(gate.metrics.netY, -0.017, accuracy: 0.000_001)
+    }
+
+    func testTwoSampleFastDisplacementBoundaryActivates() {
+        var gate = ScrollIntentGate(axis: .vertical)
+
+        XCTAssertEqual(gate.observe(deltaX: 0, deltaY: 0.007), .pending)
+        XCTAssertEqual(
+            gate.observe(deltaX: 0, deltaY: 0.009),
+            .activate(axis: .vertical)
+        )
+        XCTAssertEqual(gate.metrics.netY, 0.016, accuracy: 0.000_001)
+    }
+
+    func testTwoSampleTraceJustBelowFastDisplacementWaitsForThirdSample() {
+        var gate = ScrollIntentGate(axis: .vertical)
+
+        XCTAssertEqual(gate.observe(deltaX: 0, deltaY: 0.007), .pending)
+        XCTAssertEqual(gate.observe(deltaX: 0, deltaY: 0.00899), .pending)
+        XCTAssertEqual(
+            gate.observe(deltaX: 0, deltaY: 0.0005),
+            .activate(axis: .vertical)
+        )
+    }
+
+    func testTwoSampleFastDisplacementStillRequiresFastDominance() {
+        var gate = ScrollIntentGate(axis: .vertical)
+
+        XCTAssertEqual(gate.observe(deltaX: 0, deltaY: 0.007), .pending)
+        XCTAssertEqual(gate.observe(deltaX: 0.00225, deltaY: 0.009), .pending)
+        XCTAssertEqual(
+            gate.observe(deltaX: 0, deltaY: 0.0005),
             .activate(axis: .vertical)
         )
     }
@@ -44,15 +118,17 @@ final class ScrollIntentGateTests: XCTestCase {
         var gate = ScrollIntentGate(axis: .vertical)
 
         XCTAssertEqual(gate.observe(deltaX: 0, deltaY: 0.030), .pending)
+        XCTAssertEqual(gate.observe(deltaX: 0, deltaY: 0.002), .pending)
         XCTAssertEqual(
             gate.observe(deltaX: 0, deltaY: 0.002),
             .activate(axis: .vertical)
         )
 
-        XCTAssertEqual(gate.acceptedSamples.count, 2)
+        XCTAssertEqual(gate.acceptedSamples.count, 3)
         XCTAssertEqual(gate.acceptedSamples[0].dy, 0.008, accuracy: 0.000_001)
         XCTAssertEqual(gate.acceptedSamples[1].dy, 0.002, accuracy: 0.000_001)
-        XCTAssertEqual(gate.metrics.netY, 0.010, accuracy: 0.000_001)
+        XCTAssertEqual(gate.acceptedSamples[2].dy, 0.002, accuracy: 0.000_001)
+        XCTAssertEqual(gate.metrics.netY, 0.012, accuracy: 0.000_001)
     }
 
     func testLargeInitialDeltaAndOppositeConfirmationCannotActivate() {
@@ -559,12 +635,13 @@ final class ScrollIntentGateTests: XCTestCase {
         var gate = ScrollIntentGate(axis: .horizontal)
 
         XCTAssertEqual(gate.observe(deltaX: 0.003, deltaY: 0.002), .pending)
+        XCTAssertEqual(gate.observe(deltaX: 0.003, deltaY: 0.002), .pending)
         XCTAssertEqual(
             gate.observe(deltaX: 0.003, deltaY: 0.002),
             .activate(axis: .horizontal)
         )
-        XCTAssertEqual(gate.metrics.rawNetX, 0.006, accuracy: 0.000_001)
-        XCTAssertEqual(gate.metrics.normalizedNetX, 0.0096, accuracy: 0.000_001)
+        XCTAssertEqual(gate.metrics.rawNetX, 0.009, accuracy: 0.000_001)
+        XCTAssertEqual(gate.metrics.normalizedNetX, 0.0144, accuracy: 0.000_001)
     }
 
     func testCompensatedHorizontalMovementRejectsVerticalCandidate() {
@@ -606,7 +683,7 @@ final class ScrollIntentGateTests: XCTestCase {
 
         XCTAssertEqual(gate.observe(deltaX: 0.011, deltaY: 0), .pending)
         XCTAssertEqual(
-            gate.observe(deltaX: 0.002, deltaY: 0),
+            gate.observe(deltaX: 0.007, deltaY: 0),
             .activate(axis: .horizontal)
         )
         XCTAssertEqual(gate.metrics.sampleCount, 2)
