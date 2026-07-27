@@ -496,6 +496,72 @@ final class ScrollIntentGateTests: XCTestCase {
         )
     }
 
+    func testLateCoherenceRecoveryAcceptsFullWindowFoldbackAtRightEdge() {
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.shouldBeginLateCoherenceRecovery(
+                alreadyUsed: false,
+                hasActiveRecovery: false,
+                isRightEdge: true,
+                rejectionReason: .incoherentMovement,
+                sampleCount: 24,
+                initialSampleLimit: 24,
+                onAxisPath: 0.0546,
+                offAxisPath: 0
+            )
+        )
+    }
+
+    func testLateCoherenceRecoveryAllowsDeadlineNetCancellationOnlyWhenPathIsVertical() {
+        XCTAssertTrue(
+            ScrollIntentRecoveryPolicy.shouldBeginLateCoherenceRecovery(
+                alreadyUsed: false,
+                hasActiveRecovery: false,
+                isRightEdge: true,
+                rejectionReason: .offAxisDominant,
+                sampleCount: 24,
+                initialSampleLimit: 24,
+                onAxisPath: 0.0221,
+                offAxisPath: 0.0084
+            )
+        )
+        XCTAssertFalse(
+            ScrollIntentRecoveryPolicy.shouldBeginLateCoherenceRecovery(
+                alreadyUsed: false,
+                hasActiveRecovery: false,
+                isRightEdge: true,
+                rejectionReason: .offAxisDominant,
+                sampleCount: 24,
+                initialSampleLimit: 24,
+                onAxisPath: 0.0769,
+                offAxisPath: 0.0875
+            )
+        )
+    }
+
+    func testLateCoherenceRecoveryDoesNotExtendEarlyOrStackedRejections() {
+        for parameters in [
+            (false, false, false, ScrollIntentGate.RejectionReason.incoherentMovement, 24),
+            (false, false, true, .incoherentMovement, 23),
+            (true, false, true, .incoherentMovement, 24),
+            (false, true, true, .incoherentMovement, 24),
+            (false, false, true, .insufficientMovement, 24),
+            (false, false, true, .insufficientOnAxisMovement, 24),
+        ] {
+            XCTAssertFalse(
+                ScrollIntentRecoveryPolicy.shouldBeginLateCoherenceRecovery(
+                    alreadyUsed: parameters.0,
+                    hasActiveRecovery: parameters.1,
+                    isRightEdge: parameters.2,
+                    rejectionReason: parameters.3,
+                    sampleCount: parameters.4,
+                    initialSampleLimit: 24,
+                    onAxisPath: 0.060,
+                    offAxisPath: 0.010
+                )
+            )
+        }
+    }
+
     func testRecoveryWindowStillRequiresFullActivationDistance() {
         var gate = ScrollIntentGate(
             axis: .vertical,

@@ -211,18 +211,22 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private let activationSafetyMaxSamples = 24
     private enum ScrollRecoveryKind {
         case rightEdgeOutwardSettling
+        case rightEdgeLateCoherence
         case cornerScrollOnly
 
         var logName: String {
             switch self {
             case .rightEdgeOutwardSettling:
                 return "Right-edge outward settling recovery"
+            case .rightEdgeLateCoherence:
+                return "Right-edge late-coherence recovery"
             case .cornerScrollOnly:
                 return "Corner scroll recovery"
             }
         }
     }
     private var hasUsedEarlyOutwardScrollRecovery = false
+    private var hasUsedLateCoherenceScrollRecovery = false
     private var hasUsedCornerScrollRecovery = false
     private var activeScrollRecoveryKind: ScrollRecoveryKind?
     private var scrollRecoveryStartedUptime: Double?
@@ -464,6 +468,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         activationRawEvidenceMetrics = ScrollIntentGate.Metrics()
         activationRawEvidenceIsValid = true
         hasUsedEarlyOutwardScrollRecovery = false
+        hasUsedLateCoherenceScrollRecovery = false
         hasUsedCornerScrollRecovery = false
         activeScrollRecoveryKind = nil
         scrollRecoveryStartedUptime = nil
@@ -545,6 +550,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 activationRawEvidenceMetrics = ScrollIntentGate.Metrics()
                 activationRawEvidenceIsValid = true
                 hasUsedEarlyOutwardScrollRecovery = false
+                hasUsedLateCoherenceScrollRecovery = false
                 hasUsedCornerScrollRecovery = false
                 activeScrollRecoveryKind = nil
                 scrollRecoveryStartedUptime = nil
@@ -951,6 +957,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         activationRawEvidenceMetrics = ScrollIntentGate.Metrics()
         activationRawEvidenceIsValid = true
         hasUsedEarlyOutwardScrollRecovery = false
+        hasUsedLateCoherenceScrollRecovery = false
         hasUsedCornerScrollRecovery = false
         activeScrollRecoveryKind = nil
         scrollRecoveryStartedUptime = nil
@@ -1074,6 +1081,65 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             String(describing: activationOriginalZone),
             discardedSampleCount,
             maxTouchDisplacement,
+            ScrollIntentRecoveryPolicy.defaultRecoveryMaxSamples,
+            ScrollIntentRecoveryPolicy.defaultRecoveryMaxDuration * 1_000
+        ))
+        return true
+    }
+
+    /// A deadline rejection describes only the prefix seen by the first gate.
+    /// At the physical right edge, a noisy foldback prefix can be followed by
+    /// an unmistakable vertical scroll in the same contact. Give that suffix
+    /// one fresh, short decision window without weakening the normal gate.
+    private func beginLateCoherenceScrollRecoveryIfEligible(
+        after decision: ScrollIntentGate.Decision,
+        gate: ScrollIntentGate,
+        at eventUptime: Double
+    ) -> Bool {
+        guard case let .reject(reason) = decision,
+              !forceActionTriggered,
+              !forceEvaluationSuspendedByInvalidTouch,
+              !isContactQuarantinedUntilLift,
+              activeFingerCount == 1,
+              !requiresAllFingersLifted,
+              activationRawEvidenceIsValid,
+              ScrollIntentRecoveryPolicy.shouldBeginLateCoherenceRecovery(
+                  alreadyUsed: hasUsedLateCoherenceScrollRecovery,
+                  hasActiveRecovery: activeScrollRecoveryKind != nil,
+                  isRightEdge: activationOriginalZone == .rightEdge
+                      && currentZone == .rightEdge,
+                  rejectionReason: reason,
+                  sampleCount: gate.metrics.sampleCount,
+                  initialSampleLimit: activationSafetyMaxSamples,
+                  onAxisPath: gate.metrics.pathY,
+                  offAxisPath: gate.metrics.normalizedPathX
+              ) else {
+            return false
+        }
+
+        hasUsedLateCoherenceScrollRecovery = true
+        activeScrollRecoveryKind = .rightEdgeLateCoherence
+        scrollRecoveryStartedUptime = eventUptime
+
+        let recoveryTimestamp = activationSampleTimestamps.last
+            ?? lastTouchTime
+        let discardedSampleCount = activationDeltas.count
+        let discardedNetX = gate.metrics.rawNetX
+        let discardedNetY = gate.metrics.rawNetY
+        let discardedPathX = gate.metrics.normalizedPathX
+        let discardedPathY = gate.metrics.pathY
+        restartScrollActivationEvidence(
+            at: recoveryTimestamp,
+            logReason: nil
+        )
+        LogManager.shared.log(String(
+            format: "Right-edge late-coherence recovery began: reason=%@ discardedSamples=%d net=(%.4f,%.4f) path=(%.4f,%.4f) limit=%d/%.0fms",
+            String(describing: reason),
+            discardedSampleCount,
+            discardedNetX,
+            discardedNetY,
+            discardedPathX,
+            discardedPathY,
             ScrollIntentRecoveryPolicy.defaultRecoveryMaxSamples,
             ScrollIntentRecoveryPolicy.defaultRecoveryMaxDuration * 1_000
         ))
@@ -1448,6 +1514,14 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 gate.metrics.normalizedPathX,
                 gate.metrics.pathY
             ))
+        }
+
+        if beginLateCoherenceScrollRecoveryIfEligible(
+            after: decision,
+            gate: gate,
+            at: eventUptime
+        ) {
+            return .needMoreFrames
         }
 
         return scrollIntentResult(from: decision)

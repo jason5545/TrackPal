@@ -634,6 +634,8 @@ struct ScrollIntentRecoveryPolicy {
     static let defaultRecoveryMaxDuration: Double = 0.150
     static let defaultOutwardPrefixMaxDuration: Double = 0.150
     static let minimumCornerRecoveryConfirmationSamples = 3
+    static let minimumLateCoherenceRecoveryOnAxisPath: CGFloat = 0.020
+    static let minimumLateCoherenceRecoveryPathDominance: CGFloat = 1.5
 
     /// The gate winsorizes its first sample, so its metrics alone cannot prove
     /// that the physical prefix was small. Check the untouched samples too:
@@ -710,6 +712,48 @@ struct ScrollIntentRecoveryPolicy {
         prefixIsRecoverable: Bool
     ) -> Bool {
         !alreadyUsed && prefixIsRecoverable
+    }
+
+    /// A fresh suffix is allowed only after the full first decision window.
+    /// Incoherent prefixes already prove foldback. A deadline off-axis result
+    /// is recoverable only when the physical path was nevertheless strongly
+    /// vertical, which distinguishes net cancellation from a real cursor move.
+    static func shouldBeginLateCoherenceRecovery(
+        alreadyUsed: Bool,
+        hasActiveRecovery: Bool,
+        isRightEdge: Bool,
+        rejectionReason: ScrollIntentGate.RejectionReason,
+        sampleCount: Int,
+        initialSampleLimit: Int,
+        onAxisPath: CGFloat,
+        offAxisPath: CGFloat,
+        minimumOnAxisPath: CGFloat = minimumLateCoherenceRecoveryOnAxisPath,
+        minimumPathDominance: CGFloat = minimumLateCoherenceRecoveryPathDominance
+    ) -> Bool {
+        guard !alreadyUsed,
+              !hasActiveRecovery,
+              isRightEdge,
+              initialSampleLimit > 0,
+              sampleCount >= initialSampleLimit,
+              onAxisPath.isFinite,
+              offAxisPath.isFinite,
+              minimumOnAxisPath.isFinite,
+              minimumPathDominance.isFinite,
+              onAxisPath >= minimumOnAxisPath,
+              offAxisPath >= 0,
+              minimumOnAxisPath > 0,
+              minimumPathDominance > 1 else {
+            return false
+        }
+
+        switch rejectionReason {
+        case .incoherentMovement:
+            return true
+        case .offAxisDominant:
+            return onAxisPath >= offAxisPath * minimumPathDominance
+        case .insufficientMovement, .insufficientOnAxisMovement:
+            return false
+        }
     }
 
     static func shouldBeginCornerRecovery(
