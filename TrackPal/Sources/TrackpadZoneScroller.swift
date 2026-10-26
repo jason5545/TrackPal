@@ -132,6 +132,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     // MARK: - State
 
     private var devices: [MTDeviceRef?] = []
+    /// Keeps the enumerated device objects alive while their raw refs are in use.
+    private var deviceList: CFArray?
     private var deviceCallbackContexts: [DeviceCallbackContext] = []
     // MultitouchSupport does not document whether unregister/stop drains an
     // already-running callback synchronously. Retain retired refcons for the
@@ -364,6 +366,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             return
         }
 
+        deviceList = cfArray
         let count = CFArrayGetCount(cfArray)
         LogManager.shared.log("Found \(count) multitouch device(s)")
 
@@ -440,6 +443,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         }
 
         devices.removeAll()
+        deviceList = nil
         retiredDeviceCallbackContexts.append(contentsOf: deviceCallbackContexts)
         deviceCallbackContexts.removeAll()
         resetInputLifecycleForRestart()

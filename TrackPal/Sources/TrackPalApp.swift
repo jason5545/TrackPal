@@ -42,10 +42,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        observeSystemWake()
+
         NSLog("TrackPal: Ready")
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+    }
+
+    // MARK: - Wake recovery
+
+    private var wakeRestartTask: Task<Void, Never>?
+
+    /// Hibernate (e.g. low-battery sleep) invalidates the MultitouchSupport
+    /// device handles registered at launch: the process keeps running but
+    /// touch callbacks never arrive again. Re-enumerate devices after wake.
+    private func observeSystemWake() {
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                let reason = notification.name.rawValue
+                MainActor.assumeIsolated {
+                    self?.scheduleDeviceRestart(reason: reason)
+                }
+            }
+        }
+    }
+
+    private func scheduleDeviceRestart(reason: String) {
+        wakeRestartTask?.cancel()
+        wakeRestartTask = Task { @MainActor in
+            // Give the trackpad driver time to re-attach before enumerating.
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled,
+                  Settings.shared.isEnabled,
+                  isAccessibilityEnabled() else { return }
+            LogManager.shared.log("Re-registering multitouch devices after \(reason)")
+            let scroller = TrackpadZoneScroller.shared
+            scroller.stop()
+            scroller.start()
+        }
     }
 
     @MainActor func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
