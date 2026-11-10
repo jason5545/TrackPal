@@ -207,6 +207,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private var activationWindowStartTimestamp: Double = 0
     private var activationLastEvidenceUptime: Double?
     private var scrollIntentGate: ScrollIntentGate?
+    /// 水平捲動啟動後才存在；偵測到手指轉成另一軸時把手勢交回游標。
+    private var activationTurnMonitor: ScrollActivationTurnMonitor?
     private let minimumActivationSampleDistance: CGFloat = 0.0005
     private let minimumEvidenceActivityDistance: CGFloat = 0.00005
     private let activationEvidenceGapDeadline: Double = 0.18
@@ -844,7 +846,8 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             commitPendingForceEvaluation()
         }
 
-        if !wasEvaluatingScroll && !forceActionTriggered {
+        if !wasEvaluatingScroll && !forceActionTriggered,
+           !demoteActivatedScrollIfMovementTurned(delta: delta) {
             handleScroll(delta: delta, zone: currentZone)
         }
 
@@ -939,6 +942,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         activationWindowStartTimestamp = 0
         activationLastEvidenceUptime = nil
         scrollIntentGate = nil
+        activationTurnMonitor = nil
         velocityHistory.removeAll()
         scrollAccumulatorX = 0
         scrollAccumulatorY = 0
@@ -1249,6 +1253,16 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             gestureOutcome = "scroll:\(currentZone)"
 
             let acceptedDeltas = acceptedActivationDeltasForFlush()
+            if scrollAxis(for: currentZone) == .horizontal {
+                activationTurnMonitor = ScrollActivationTurnMonitor(
+                    axis: .horizontal,
+                    seed: acceptedDeltas.map {
+                        ScrollIntentGate.Sample(dx: $0.x, dy: $0.y)
+                    }
+                )
+            } else {
+                activationTurnMonitor = nil
+            }
             seedVelocityHistoryFromActivation(acceptedDeltas: acceptedDeltas)
             for buffered in acceptedDeltas {
                 handleScroll(delta: buffered, zone: currentZone)
@@ -1576,10 +1590,55 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
     private func makeScrollIntentGate(for zone: ScrollZone) -> ScrollIntentGate? {
         guard let axis = scrollAxis(for: zone) else { return nil }
-        return ScrollIntentGate(
-            axis: axis,
-            configuration: .init(maxSamples: activationSafetyMaxSamples)
+        let configuration: ScrollIntentGate.Configuration
+        switch axis {
+        case .horizontal:
+            configuration = .horizontalEdge(maxSamples: activationSafetyMaxSamples)
+        case .vertical:
+            configuration = .init(maxSamples: activationSafetyMaxSamples)
+        }
+        return ScrollIntentGate(axis: axis, configuration: configuration)
+    }
+
+    /// 水平捲動啟動後，若手指明顯改往另一軸移動，取消捲動並交回游標。
+    /// 這一幀不送捲動事件；mouseMoved 隨 `isActivelyScrollingInZone`
+    /// 變成 false 恢復放行。
+    private func demoteActivatedScrollIfMovementTurned(delta: CGPoint) -> Bool {
+        guard var monitor = activationTurnMonitor else { return false }
+        guard isActivelyScrollingInZone,
+              scrollAxis(for: currentZone) == monitor.axis else {
+            return false
+        }
+
+        let shouldDemote = monitor.observe(
+            ScrollIntentGate.Sample(dx: delta.x, dy: delta.y)
         )
+        activationTurnMonitor = monitor.isExpired ? nil : monitor
+        guard shouldDemote else { return false }
+
+        let demotedZone = currentZone
+        activationTurnMonitor = nil
+        if hasEmittedScrollBegan {
+            postScrollEvent(deltaX: 0, deltaY: 0, scrollPhase: 4, momentumPhase: 0)
+        }
+        hasEmittedScrollBegan = false
+        velocityHistory.removeAll()
+        scrollAccumulatorX = 0
+        scrollAccumulatorY = 0
+        isActivelyScrollingInZone = false
+        currentZone = .center
+        gestureOutcome = "scroll-demoted:\(demotedZone)"
+        LogManager.shared.log(String(
+            format: "Scroll demoted → center (movement turned) zone=%@ net=(%.4f,%.4f) path=(%.4f,%.4f) pixels=(%lld,%lld)",
+            String(describing: demotedZone),
+            monitor.metrics.rawNetX,
+            monitor.metrics.rawNetY,
+            monitor.metrics.normalizedPathX,
+            monitor.metrics.pathY,
+            emittedScrollPixelsX,
+            emittedScrollPixelsY
+        ))
+        return true
     }
 
     private func scrollAxis(for zone: ScrollZone) -> ScrollIntentGate.Axis? {
