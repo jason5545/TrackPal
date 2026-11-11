@@ -214,6 +214,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private var horizontalExitMonitor: HorizontalScrollExitMonitor?
     private var pointerActivityRecency = PointerActivityRecency()
     private var gesturePointerActivityGap: Double?
+    private var gestureHorizontalScrollGap: Double?
     /// 落在水平長條那一刻的游標位置（全域螢幕座標）。確認是捲動時把游標
     /// 放回這裡，捲動才會作用在落指時游標所在的內容上。
     private var stripPointerOrigin: CGPoint?
@@ -491,6 +492,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         stripPointerOrigin = nil
         pointerActivityRecency.reset()
         gesturePointerActivityGap = nil
+        gestureHorizontalScrollGap = nil
         isActivelyScrollingInZone = false
         isEvaluatingScrollCandidate = false
     }
@@ -592,6 +594,9 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 horizontalExitMonitor = nil
                 gesturePointerActivityGap = pointerActivityRecency
                     .lastPointerActivityEnd
+                    .map { eventUptime - $0 }
+                gestureHorizontalScrollGap = pointerActivityRecency
+                    .lastHorizontalScrollEnd
                     .map { eventUptime - $0 }
                 GestureTraceRecorder.shared.begin(timestamp: timestamp)
 
@@ -985,6 +990,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 outcome: gestureOutcome,
                 duration: duration,
                 pointerActivityGap: gesturePointerActivityGap,
+                horizontalScrollGap: gestureHorizontalScrollGap,
                 stripDepth: Double(bottomZoneHeight),
                 edgeWidth: Double(edgeZoneWidth),
                 cornerSize: Double(cornerTriggerZoneSize),
@@ -996,6 +1002,13 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             // 這次接觸如果是在移游標，記下結束時間；緊接著落在水平長條的
             // 接觸多半是接力移游標，要更強的證據才算捲動。
             let endedAsScroll = gestureOutcome.hasPrefix("scroll:")
+            if endedAsScroll,
+               isHorizontalZone(currentZone),
+               emittedScrollEventCount > 0 {
+                pointerActivityRecency.recordHorizontalScrollEnd(
+                    at: CACurrentMediaTime()
+                )
+            }
             let wasInterrupted = gestureOutcome == "multi-finger"
                 || gestureOutcome == "filter-large"
                 || gestureOutcome == "filter-light"
@@ -1016,6 +1029,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         horizontalExitMonitor = nil
         stripPointerOrigin = nil
         gesturePointerActivityGap = nil
+        gestureHorizontalScrollGap = nil
         isScrollActivationPending = false
         activationOriginalZone = .none
         activationDeltas.removeAll()
@@ -1697,22 +1711,26 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
         let landedAfterPointerActivity = pointerActivityRecency
             .landedAfterPointerActivity(at: eventUptime)
+        let continuesRecentScroll = pointerActivityRecency
+            .continuesHorizontalScroll(at: eventUptime)
         var gate = HorizontalStripIntentGate(
             side: zone == .topEdge ? .top : .bottom,
             configuration: .init(stripDepth: bottomZoneHeight),
-            landedAfterPointerActivity: landedAfterPointerActivity
+            landedAfterPointerActivity: landedAfterPointerActivity,
+            continuesRecentScroll: continuesRecentScroll
         )
         let decision = gate.observe(position: position, timestamp: timestamp)
         stripIntentGate = gate
         stripPointerOrigin = CGEvent(source: nil)?.location
 
         LogManager.shared.log(String(
-            format: "Gesture %llu started at (%.3f, %.3f) zone=%@ [STRIP-PENDING afterPointer=%d required=%.3f/%.2fs]",
+            format: "Gesture %llu started at (%.3f, %.3f) zone=%@ [STRIP-PENDING afterPointer=%d afterScroll=%d required=%.3f/%.2fs]",
             activeTouchSessionID ?? 0,
             position.x,
             position.y,
             String(describing: zone),
             landedAfterPointerActivity ? 1 : 0,
+            continuesRecentScroll ? 1 : 0,
             gate.requiredDistance,
             gate.requiredDuration
         ))

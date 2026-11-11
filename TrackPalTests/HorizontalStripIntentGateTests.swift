@@ -9,12 +9,14 @@ final class HorizontalStripIntentGateTests: XCTestCase {
 
     private func makeGate(
         side: HorizontalStripIntentGate.Side = .bottom,
-        afterPointerActivity: Bool = false
+        afterPointerActivity: Bool = false,
+        afterScroll: Bool = false
     ) -> HorizontalStripIntentGate {
         HorizontalStripIntentGate(
             side: side,
             configuration: .init(stripDepth: stripDepth),
-            landedAfterPointerActivity: afterPointerActivity
+            landedAfterPointerActivity: afterPointerActivity,
+            continuesRecentScroll: afterScroll
         )
     }
 
@@ -206,9 +208,9 @@ final class HorizontalStripIntentGateTests: XCTestCase {
             start: CGPoint(x: 0.20, y: 0.01)
         )
 
-        // 一般門檻（第 16 幀）不啟動；要到 0.12、0.30 秒（第 38 幀）。
-        XCTAssertEqual(run.move(dx: 0.002, dy: 0, frames: 37), .pending)
-        XCTAssertEqual(run.move(dx: 0.002, dy: 0), .activate)
+        // 一般門檻（第 16 幀）不啟動；要到 0.08、0.20 秒（第 25～26 幀）。
+        XCTAssertEqual(run.move(dx: 0.002, dy: 0, frames: 24), .pending)
+        XCTAssertEqual(run.move(dx: 0.002, dy: 0, frames: 3), .activate)
     }
 
     func testLoggedRimScrollRightAfterPointerActivityActivates() {
@@ -233,15 +235,87 @@ final class HorizontalStripIntentGateTests: XCTestCase {
             start: CGPoint(x: 0.24, y: 0.0)
         )
 
-        XCTAssertEqual(run.move(dx: -0.0038, dy: 0, frames: 25), .pending)
+        XCTAssertEqual(run.move(dx: -0.0038, dy: 0, frames: 20), .pending)
     }
 
-    func testOriginOutsideRimBandNeedsLongerSlide() {
-        // 起點離下緣 10 mm：多半是從左下起步的游標移動。
+    func testFastStraightSlideWaitingOnDurationIsNotWandering() {
+        // Trace 64（11/11 15:35:38）：刻意的快速橫滑，在最短持續時間之前
+        // 就走完路徑上限，第二版把它判成游移。
+        var run = driver(
+            makeGate(afterPointerActivity: true),
+            start: CGPoint(x: 0.20, y: 0.056)
+        )
+
+        XCTAssertEqual(run.move(dx: 0.007, dy: 0.0002, frames: 24), .pending)
+        XCTAssertEqual(run.move(dx: 0.007, dy: 0.0002, frames: 3), .activate)
+    }
+
+    // MARK: - Moving toward the rim
+
+    func testOriginDepthDoesNotChangeThresholds() {
+        // 實機記到的刻意捲動，起點離下緣 0～8 mm 都有。
         var run = driver(makeGate(), start: CGPoint(x: 0.33, y: 0.10))
 
-        XCTAssertEqual(run.move(dx: 0.002, dy: 0, frames: 37), .pending)
+        XCTAssertEqual(run.move(dx: 0.002, dy: 0, frames: 15), .pending)
         XCTAssertEqual(run.move(dx: 0.002, dy: 0), .activate)
+    }
+
+    func testDescendingToRimThenSlidingActivates() {
+        // Trace 60（11/11 15:35:31）：落在 (0.485, 0.059)，先往下緣靠 3 mm
+        // 再往左滑。第二版在往下那段就判成垂直移動。
+        var run = driver(makeGate(), start: CGPoint(x: 0.485, y: 0.059))
+
+        XCTAssertEqual(run.move(dx: 0, dy: -0.004, frames: 8), .pending)
+        XCTAssertEqual(run.move(dx: -0.003, dy: 0, frames: 20), .activate)
+    }
+
+    func testSlidingWhileDescendingToRimActivates() {
+        // Trace 58（11/11 15:35:29）：從 (0.541, 0.079) 一邊往右滑一邊往下緣
+        // 靠，結束在 (0.737, 0.032)。
+        var run = driver(makeGate(), start: CGPoint(x: 0.541, y: 0.079))
+
+        XCTAssertEqual(run.move(dx: 0.0027, dy: -0.00065, frames: 20), .activate)
+    }
+
+    func testSteepDescentWithLittleSidewaysTravelDoesNotActivate() {
+        // 幾乎直直往下：橫向只有垂直的一半。
+        var run = driver(makeGate(), start: CGPoint(x: 0.40, y: 0.16))
+
+        XCTAssertEqual(run.move(dx: 0.001, dy: -0.004, frames: 38), .pending)
+    }
+
+    func testFollowUpStrokeAfterScrollUsesNormalThresholds() {
+        // Trace 46（11/11 15:35:07）：前一下水平捲動結束 0.8 秒後，第二下落在
+        // 離下緣較遠的位置往右滑。加嚴的話 0.39 秒才啟動，只捲到 2 px。
+        var run = driver(
+            makeGate(afterScroll: true),
+            start: CGPoint(x: 0.378, y: 0.10)
+        )
+
+        XCTAssertEqual(run.move(dx: 0.002, dy: 0, frames: 15), .pending)
+        XCTAssertEqual(run.move(dx: 0.002, dy: 0), .activate)
+    }
+
+    func testScrollContinuationOverridesPointerActivity() {
+        var run = driver(
+            makeGate(afterPointerActivity: true, afterScroll: true),
+            start: CGPoint(x: 0.30, y: 0.01)
+        )
+
+        XCTAssertEqual(run.move(dx: 0.002, dy: 0, frames: 16), .activate)
+    }
+
+    func testHorizontalScrollContinuationWindow() {
+        var recency = PointerActivityRecency()
+        XCTAssertFalse(recency.continuesHorizontalScroll(at: 10))
+
+        recency.recordHorizontalScrollEnd(at: 10)
+
+        XCTAssertTrue(recency.continuesHorizontalScroll(at: 10.8))
+        XCTAssertFalse(recency.continuesHorizontalScroll(at: 11.1))
+        XCTAssertFalse(recency.continuesHorizontalScroll(at: 9.5))
+        // 捲動結束不算游標活動。
+        XCTAssertFalse(recency.landedAfterPointerActivity(at: 10.2))
     }
 
     // MARK: - Pauses and interruptions

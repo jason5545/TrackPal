@@ -12,15 +12,17 @@ import CoreGraphics
 /// 這個 gate 的規則：
 /// - 判斷期間呼叫端不凍結游標，所以可以等到證據夠強才決定，錯了也只是
 ///   游標照常移動。
-/// - 啟動條件是「留在長條內、近乎水平、持續一段時間的直線滑動」：補償後
-///   水平淨位移達 `activationDistance`，垂直淨位移不超過水平的
-///   `maximumSlope` 倍，路徑連貫，而且判斷視窗至少持續
-///   `minimumWindowDuration`。
-/// - 兩種情況改用較長的距離與時間（`cautious…`）：手指在游標移動剛結束後
-///   落下（連續移游標的接力動作），或起點不在貼邊的那一帶。部署後第一批
-///   逐幀軌跡顯示，Jason 刻意做水平捲動時是從邊框滑進來、貼著最下緣慢慢
-///   滑（y 在 0.02 以內，約每秒 20 mm）；起點較深的橫向滑動多半是從左下
-///   起步的游標移動。
+/// - 啟動條件是「留在長條內、持續一段時間的橫向直線滑動」：補償後水平
+///   淨位移達 `activationDistance`，路徑連貫，判斷視窗至少持續
+///   `minimumWindowDuration`，而且沒有明顯往觸控板內側走。
+/// - 垂直方向分開看。往內側（遠離邊緣）是移游標的特徵，淨位移不得超過
+///   水平的 `maximumSlope` 倍。往邊緣靠不算反證：11/11 實機記到 17 次刻意
+///   的水平捲動，起點離下緣 0～8 mm 都有，常見的走法是落指後往下緣靠、
+///   再貼著邊橫滑，或一邊橫滑一邊往下緣靠。同一段時間的游標移動都是往
+///   內側走。
+/// - 手指在游標移動剛結束後落下時（單指接力移游標），距離與時間改用較長
+///   的 `cautious…`。上一次接觸剛做完水平捲動又落在長條時不加嚴：捲動
+///   本來就是一下一下接著滑。
 /// - 一旦明顯走向垂直、離開長條、或游移太久，整段接觸交給游標，不再回頭
 ///   判斷。
 ///
@@ -37,27 +39,30 @@ struct HorizontalStripIntentGate {
         var stripDepth: CGFloat
         /// 一般情況下啟動所需的補償後水平淨位移。
         var activationDistance: CGFloat = 0.05
-        /// 剛移完游標、或起點不在貼邊帶時所需的水平淨位移。
-        var cautiousActivationDistance: CGFloat = 0.12
+        /// 剛移完游標時所需的水平淨位移。
+        var cautiousActivationDistance: CGFloat = 0.08
         /// 判斷視窗至少要持續的時間。日誌裡 0.1 秒內結束的橫向接觸是手掠過
         /// 邊緣，不是捲動。
         var minimumWindowDuration: Double = 0.12
-        var cautiousMinimumWindowDuration: Double = 0.30
-        /// 起點離觸控板邊緣在這個距離內算「貼邊」。
-        var rimBandDepth: CGFloat = 0.03
-        /// 啟動時 |垂直淨位移| 不得超過 |水平淨位移| 的這個倍數（約 14 度）。
+        var cautiousMinimumWindowDuration: Double = 0.20
+        /// 啟動時往內側（遠離邊緣）的淨位移不得超過水平淨位移的這個倍數
+        /// （約 14 度）。
         var maximumSlope: CGFloat = 0.25
+        /// 啟動時往邊緣靠的淨位移不得超過水平淨位移的這個倍數。
+        var maximumDescentSlope: CGFloat = 1.0
         var minimumAxisCoherence: CGFloat = 0.80
         var minimumPathCoherence: CGFloat = 0.75
         /// 判斷視窗內至少要有的位移筆數。
         var minimumDeltaCount = 3
-        /// 垂直淨位移達到這個距離、而且斜度超過 `rejectionSlope` 就交給游標。
+        /// 往內側的淨位移達到這個距離、而且斜度超過 `rejectionSlope` 就交給
+        /// 游標。
         var rejectionVerticalDistance: CGFloat = 0.03
         var rejectionSlope: CGFloat = 0.5
         /// 啟動前，手指超出長條這麼多就交給游標。
         var exitMargin: CGFloat = 0.02
-        /// 判斷視窗內累積路徑的上限；超過仍未啟動就交給游標。
-        var wanderPathBudget: CGFloat = 0.20
+        /// 判斷視窗內累積路徑的上限；超過時軌跡仍不像橫向直線滑動就交給
+        /// 游標。軌跡符合、只差持續時間的快速滑動不受這個上限影響。
+        var wanderPathBudget: CGFloat = 0.25
         /// 手指停在 `pauseRadius` 內超過這個時間算停頓。
         var pauseDuration: Double = 0.18
         var pauseRadius: CGFloat = 0.004
@@ -75,7 +80,7 @@ struct HorizontalStripIntentGate {
     enum RejectionReason: String, Equatable {
         /// 手指離開了長條。
         case leftStrip
-        /// 明顯走向垂直或斜線。
+        /// 明顯往觸控板內側走（垂直或斜線）。
         case verticalMovement
         /// 走了很長的路仍不符合直線滑動。
         case wandering
@@ -97,6 +102,8 @@ struct HorizontalStripIntentGate {
     let configuration: Configuration
     /// 這次接觸是不是在游標移動剛結束後落下。
     let landedAfterPointerActivity: Bool
+    /// 這次接觸是不是緊接在一次水平捲動之後落下。
+    let continuesRecentScroll: Bool
 
     private(set) var decision: Decision = .pending
     /// 目前判斷視窗內的位移筆數與淨位移（未補償），供日誌使用。
@@ -121,18 +128,18 @@ struct HorizontalStripIntentGate {
     init(
         side: Side,
         configuration: Configuration,
-        landedAfterPointerActivity: Bool
+        landedAfterPointerActivity: Bool,
+        continuesRecentScroll: Bool = false
     ) {
         self.side = side
         self.configuration = configuration
         self.landedAfterPointerActivity = landedAfterPointerActivity
+        self.continuesRecentScroll = continuesRecentScroll
     }
 
     /// 目前判斷視窗是不是要用較嚴的距離與時間。
     var isCautious: Bool {
-        if landedAfterPointerActivity { return true }
-        guard let windowOrigin else { return false }
-        return windowOrigin.depth >= configuration.rimBandDepth
+        landedAfterPointerActivity && !continuesRecentScroll
     }
 
     /// 目前判斷視窗需要的水平淨位移。
@@ -204,26 +211,32 @@ struct HorizontalStripIntentGate {
             y: side == .bottom ? signedNetDepth : -signedNetDepth
         )
         let netX = abs(point.x - origin.x)
-        let netDepth = abs(signedNetDepth)
+        // 往內側（遠離邊緣）與往邊緣靠分開算。
+        let inward = max(0, signedNetDepth)
+        let towardEdge = max(0, -signedNetDepth)
 
-        if netDepth >= configuration.rejectionVerticalDistance,
-           netDepth > configuration.rejectionSlope * netX {
+        if inward >= configuration.rejectionVerticalDistance,
+           inward > configuration.rejectionSlope * netX {
             return finish(.reject(.verticalMovement))
         }
 
-        if windowDeltaCount >= configuration.minimumDeltaCount,
-           point.depth <= configuration.stripDepth,
-           point.time - origin.time >= requiredDuration,
-           netX >= requiredDistance,
-           netDepth <= configuration.maximumSlope * netX,
-           pathX > 0,
-           netX / pathX >= configuration.minimumAxisCoherence,
-           pathLength > 0,
-           hypot(netX, netDepth) / pathLength >= configuration.minimumPathCoherence {
-            return finish(.activate)
-        }
+        let looksLikeStraightSlide =
+            windowDeltaCount >= configuration.minimumDeltaCount
+            && point.depth <= configuration.stripDepth
+            && netX >= requiredDistance
+            && inward <= configuration.maximumSlope * netX
+            && towardEdge <= configuration.maximumDescentSlope * netX
+            && pathX > 0
+            && netX / pathX >= configuration.minimumAxisCoherence
+            && pathLength > 0
+            && hypot(netX, signedNetDepth) / pathLength
+                >= configuration.minimumPathCoherence
 
-        if pathLength >= configuration.wanderPathBudget {
+        if looksLikeStraightSlide {
+            if point.time - origin.time >= requiredDuration {
+                return finish(.activate)
+            }
+        } else if pathLength >= configuration.wanderPathBudget {
             return finish(.reject(.wandering))
         }
 
@@ -376,6 +389,9 @@ struct HorizontalScrollExitMonitor {
 /// 動作跟刻意的水平捲動分不出來，只能靠「剛剛還在移游標」這個脈絡提高
 /// 門檻。
 struct PointerActivityRecency {
+    /// 水平捲動結束後，這段時間內再落在長條算「接著捲」。
+    static let scrollContinuationWindow: Double = 1.0
+
     /// 接力間隔的上限。日誌裡確定是游標移動的下方區誤啟動，69% 發生在
     /// 上一個手勢結束後 0.8 秒內。
     static let defaultWindow: Double = 0.7
@@ -383,14 +399,35 @@ struct PointerActivityRecency {
     static let minimumPointerExcursion: CGFloat = 0.03
 
     private(set) var lastPointerActivityEnd: Double?
+    private(set) var lastHorizontalScrollEnd: Double?
 
     mutating func recordPointerActivityEnd(at uptime: Double) {
         guard uptime.isFinite else { return }
         lastPointerActivityEnd = uptime
     }
 
+    mutating func recordHorizontalScrollEnd(at uptime: Double) {
+        guard uptime.isFinite else { return }
+        lastHorizontalScrollEnd = uptime
+    }
+
     mutating func reset() {
         lastPointerActivityEnd = nil
+        lastHorizontalScrollEnd = nil
+    }
+
+    func continuesHorizontalScroll(
+        at uptime: Double,
+        window: Double = scrollContinuationWindow
+    ) -> Bool {
+        guard let lastHorizontalScrollEnd,
+              uptime.isFinite,
+              window.isFinite,
+              window > 0 else {
+            return false
+        }
+        let gap = uptime - lastHorizontalScrollEnd
+        return gap >= 0 && gap < window
     }
 
     func landedAfterPointerActivity(

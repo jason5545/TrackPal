@@ -27,6 +27,8 @@ final class GestureTraceRecorder: @unchecked Sendable {
         var duration: Double
         /// 距離上一次游標活動結束的秒數；沒有紀錄時為 nil。
         var pointerActivityGap: Double?
+        /// 距離上一次水平捲動結束的秒數；沒有紀錄時為 nil。
+        var horizontalScrollGap: Double?
         var stripDepth: Double
         var edgeWidth: Double
         var cornerSize: Double
@@ -111,6 +113,8 @@ final class GestureTraceRecorder: @unchecked Sendable {
 
         let gap = summary.pointerActivityGap
             .map { String(format: "%.3f", $0) } ?? "null"
+        let scrollGap = summary.horizontalScrollGap
+            .map { String(format: "%.3f", $0) } ?? "null"
         let line = "{\"id\":\(summary.sessionID)"
             + ",\"date\":\"\(dateFormatter.string(from: startDate))\""
             + ",\"zone\":\"\(summary.initialZone)\""
@@ -118,6 +122,7 @@ final class GestureTraceRecorder: @unchecked Sendable {
             + ",\"outcome\":\"\(summary.outcome)\""
             + String(format: ",\"dur\":%.3f", summary.duration)
             + ",\"pointerGap\":\(gap)"
+            + ",\"scrollGap\":\(scrollGap)"
             + String(format: ",\"stripDepth\":%.4f", summary.stripDepth)
             + String(format: ",\"edgeWidth\":%.4f", summary.edgeWidth)
             + String(format: ",\"cornerSize\":%.4f", summary.cornerSize)
