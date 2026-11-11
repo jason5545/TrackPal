@@ -69,22 +69,6 @@ struct ScrollIntentGate {
             self.offAxisRejectionDisplacement = offAxisRejectionDisplacement
             self.offAxisRejectionDominance = offAxisRejectionDominance
         }
-
-        /// 下方／上方水平捲動區專用。
-        ///
-        /// [AI-Claude: 2026-11-10] 日誌裡 bottomEdge 啟動 967 次，約 430 次是
-        /// 游標移動或輕點被判成水平捲動：最小的一筆在 24ms 內、淨位移
-        /// 0.0054（約 1mm）就啟動。游標移動常帶水平分量，所以水平軸要比
-        /// 垂直軸多累積一倍的淨位移才啟動。整段手勢水平路徑不到 0.016 的
-        /// 誤觸發有 27 次，這些在新門檻下不可能啟動；真的水平捲動沒有一筆
-        /// 低於這個值，估計延遲中位數約 9ms。
-        static func horizontalEdge(maxSamples: Int) -> Configuration {
-            Configuration(
-                maxSamples: maxSamples,
-                activationDisplacement: 0.016,
-                fastActivationDisplacement: 0.024
-            )
-        }
     }
 
     enum Decision: Equatable {
@@ -570,6 +554,28 @@ struct ScrollIntentGate {
         return .activate(axis: dominantAxis)
     }
 
+    /// 角落要轉成水平捲動時的額外條件。
+    ///
+    /// [AI-Claude: 2026-11-11] `resolveCorner` 用一般門檻（淨位移 0.008）決定
+    /// 方向。垂直邊緣夠窄，這個門檻沒問題；水平長條是移游標最常起步的地方，
+    /// 所以轉成水平捲動要跟 `HorizontalStripIntentGate` 一樣，是一段近乎水平
+    /// 的直線滑動才算。
+    static func cornerHorizontalPromotionQualifies(
+        samples: [Sample],
+        minimumDistance: CGFloat = 0.05,
+        maximumSlope: CGFloat = 0.25,
+        minimumAxisCoherence: CGFloat = 0.80,
+        minimumPathCoherence: CGFloat = 0.75
+    ) -> Bool {
+        var metrics = Metrics()
+        samples.forEach { metrics.append($0) }
+        let horizontal = abs(metrics.normalizedNetX)
+        return horizontal >= minimumDistance
+            && abs(metrics.netY) <= maximumSlope * horizontal
+            && metrics.axisCoherence(for: .horizontal) >= minimumAxisCoherence
+            && metrics.pathCoherence >= minimumPathCoherence
+    }
+
     private static func dominantAxis(
         from metrics: Metrics,
         minimumDominance: CGFloat
@@ -848,76 +854,5 @@ struct ScrollIntentRecoveryPolicy {
 
         return sampleCount >= maximumSampleCount
             || elapsed >= maximumDuration
-    }
-}
-
-/// 水平捲動啟動之後的轉向監測。
-///
-/// [AI-Claude: 2026-11-10] 從下方區開始移動游標時，前幾幀常常剛好偏水平，
-/// gate 啟動後手指才往上走。日誌裡這類誤觸發佔 bottomEdge 啟動的四分之一以上
-/// （整段淨位移垂直佔 65% 以上），游標整段被凍住。捲動還年輕（目標軸路徑
-/// 未達 `maximumOnAxisPath`）時，若從啟動視窗起算的淨位移明顯轉向另一軸，
-/// 就把手勢交回游標。路徑超過上限後監測失效，長時間來回捲動不受影響。
-struct ScrollActivationTurnMonitor {
-    struct Configuration: Equatable {
-        let minimumOffAxisNet: CGFloat
-        let minimumOffAxisDominance: CGFloat
-        let maximumOnAxisPath: CGFloat
-
-        init(
-            minimumOffAxisNet: CGFloat = 0.03,
-            minimumOffAxisDominance: CGFloat = 0.65,
-            maximumOnAxisPath: CGFloat = 0.12
-        ) {
-            self.minimumOffAxisNet = minimumOffAxisNet
-            self.minimumOffAxisDominance = minimumOffAxisDominance
-            self.maximumOnAxisPath = maximumOnAxisPath
-        }
-    }
-
-    let axis: ScrollIntentGate.Axis
-    let configuration: Configuration
-    private(set) var metrics = ScrollIntentGate.Metrics()
-    private(set) var isExpired = false
-
-    /// `seed` 是 gate 啟動時接受的 samples，讓轉向判斷涵蓋整個啟動視窗。
-    init(
-        axis: ScrollIntentGate.Axis,
-        seed: [ScrollIntentGate.Sample] = [],
-        configuration: Configuration = Configuration()
-    ) {
-        self.axis = axis
-        self.configuration = configuration
-        for sample in seed {
-            metrics.append(sample)
-        }
-        updateExpiry()
-    }
-
-    /// 加入一幀位移；回傳 true 表示應該取消捲動、交回游標。
-    mutating func observe(_ sample: ScrollIntentGate.Sample) -> Bool {
-        guard !isExpired,
-              sample.dx.isFinite,
-              sample.dy.isFinite else {
-            return false
-        }
-
-        metrics.append(sample)
-        updateExpiry()
-        guard !isExpired else { return false }
-
-        let onAxis = metrics.onAxisNet(for: axis)
-        let offAxis = metrics.offAxisNet(for: axis)
-        let total = onAxis + offAxis
-        guard total > 0 else { return false }
-
-        return offAxis >= configuration.minimumOffAxisNet
-            && offAxis / total >= configuration.minimumOffAxisDominance
-    }
-
-    private mutating func updateExpiry() {
-        if metrics.onAxisPath(for: axis) >= configuration.maximumOnAxisPath {
-            isExpired = true
-        }
     }
 }

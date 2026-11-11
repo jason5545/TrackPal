@@ -207,8 +207,16 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     private var activationWindowStartTimestamp: Double = 0
     private var activationLastEvidenceUptime: Double?
     private var scrollIntentGate: ScrollIntentGate?
-    /// 水平捲動啟動後才存在；偵測到手指轉成另一軸時把手勢交回游標。
-    private var activationTurnMonitor: ScrollActivationTurnMonitor?
+    // [AI-Claude: 2026-11-11] 水平長條改成游標優先：判斷期間不凍結游標，
+    // 由 HorizontalStripIntentGate 決定是否啟動；啟動後由
+    // HorizontalScrollExitMonitor 監看手指有沒有離開長條或轉向。
+    private var stripIntentGate: HorizontalStripIntentGate?
+    private var horizontalExitMonitor: HorizontalScrollExitMonitor?
+    private var pointerActivityRecency = PointerActivityRecency()
+    private var gesturePointerActivityGap: Double?
+    /// 落在水平長條那一刻的游標位置（全域螢幕座標）。確認是捲動時把游標
+    /// 放回這裡，捲動才會作用在落指時游標所在的內容上。
+    private var stripPointerOrigin: CGPoint?
     private let minimumActivationSampleDistance: CGFloat = 0.0005
     private let minimumEvidenceActivityDistance: CGFloat = 0.00005
     private let activationEvidenceGapDeadline: Double = 0.18
@@ -478,6 +486,11 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         hasUsedCornerScrollRecovery = false
         activeScrollRecoveryKind = nil
         scrollRecoveryStartedUptime = nil
+        stripIntentGate = nil
+        horizontalExitMonitor = nil
+        stripPointerOrigin = nil
+        pointerActivityRecency.reset()
+        gesturePointerActivityGap = nil
         isActivelyScrollingInZone = false
         isEvaluatingScrollCandidate = false
     }
@@ -575,6 +588,12 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 emittedScrollEventCount = 0
                 emittedScrollPixelsX = 0
                 emittedScrollPixelsY = 0
+                stripIntentGate = nil
+                horizontalExitMonitor = nil
+                gesturePointerActivityGap = pointerActivityRecency
+                    .lastPointerActivityEnd
+                    .map { eventUptime - $0 }
+                GestureTraceRecorder.shared.begin(timestamp: timestamp)
 
                 let preliminaryZone = determineZone(position)
                 currentZone = preliminaryZone
@@ -593,7 +612,16 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                     shouldReplayPendingPrimaryClick = false
                 }
 
-                if isScrollZone(preliminaryZone) {
+                if isHorizontalZone(preliminaryZone) {
+                    // Cancel any running inertia from a previous scroll direction
+                    DispatchQueue.main.async { InertiaScroller.shared.stopInertia() }
+                    beginStripIntentEvaluation(
+                        zone: preliminaryZone,
+                        position: position,
+                        timestamp: timestamp,
+                        eventUptime: eventUptime
+                    )
+                } else if isScrollZone(preliminaryZone) {
                     // Cancel any running inertia from a previous scroll direction
                     DispatchQueue.main.async { InertiaScroller.shared.stopInertia() }
                     // Normal edge scrolling does not require force.
@@ -682,6 +710,12 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             } else if isScrollActivationPending && isScrollZone(currentZone) {
                 LogManager.shared.log("Touch released during scroll activation pending → no scroll")
                 gestureOutcome = "tap-in-scroll-zone"
+            } else if stripIntentGate != nil {
+                // 放開時仍未定案：整段都是游標或輕點，沒有送出捲動。
+                gestureOutcome = maxTouchDisplacement
+                    < PointerActivityRecency.minimumPointerExcursion
+                    ? "tap-in-scroll-zone"
+                    : "strip-undecided"
             } else {
                 // Send scroll phase ended event before starting inertia
                 if hasEmittedScrollBegan {
@@ -748,6 +782,16 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             if velocityHistory.count > velocityHistorySize {
                 velocityHistory.removeFirst()
             }
+        }
+
+        // 水平長條的候選：游標照常移動，只把位置交給 gate 判斷。
+        if var gate = stripIntentGate {
+            let decision = gate.observe(position: position, timestamp: timestamp)
+            stripIntentGate = gate
+            applyStripIntentDecision(decision, gate: gate)
+            lastTouchPosition = position
+            lastTouchTime = timestamp
+            return
         }
 
         // Scroll direction gets the first decision on this touch frame. A
@@ -847,7 +891,10 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         }
 
         if !wasEvaluatingScroll && !forceActionTriggered,
-           !demoteActivatedScrollIfMovementTurned(delta: delta) {
+           !demoteActivatedHorizontalScrollIfNeeded(
+               position: position,
+               delta: delta
+           ) {
             handleScroll(delta: delta, zone: currentZone)
         }
 
@@ -930,10 +977,45 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 )
             }
             LogManager.shared.log(terminalRecord)
+
+            GestureTraceRecorder.shared.finish(.init(
+                sessionID: sessionID,
+                initialZone: String(describing: gestureInitialZone),
+                finalZone: String(describing: currentZone),
+                outcome: gestureOutcome,
+                duration: duration,
+                pointerActivityGap: gesturePointerActivityGap,
+                stripDepth: Double(bottomZoneHeight),
+                edgeWidth: Double(edgeZoneWidth),
+                cornerSize: Double(cornerTriggerZoneSize),
+                scrollPixelsX: emittedScrollPixelsX,
+                scrollPixelsY: emittedScrollPixelsY,
+                maximumForce: forcePressMaxForce
+            ))
+
+            // 這次接觸如果是在移游標，記下結束時間；緊接著落在水平長條的
+            // 接觸多半是接力移游標，要更強的證據才算捲動。
+            let endedAsScroll = gestureOutcome.hasPrefix("scroll:")
+            let wasInterrupted = gestureOutcome == "multi-finger"
+                || gestureOutcome == "filter-large"
+                || gestureOutcome == "filter-light"
+            if !endedAsScroll,
+               !forceActionTriggered,
+               wasInterrupted
+                || maxTouchDisplacement
+                    >= PointerActivityRecency.minimumPointerExcursion {
+                pointerActivityRecency.recordPointerActivityEnd(
+                    at: CACurrentMediaTime()
+                )
+            }
         }
 
         isTracking = false
         currentZone = .none
+        stripIntentGate = nil
+        horizontalExitMonitor = nil
+        stripPointerOrigin = nil
+        gesturePointerActivityGap = nil
         isScrollActivationPending = false
         activationOriginalZone = .none
         activationDeltas.removeAll()
@@ -942,7 +1024,6 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         activationWindowStartTimestamp = 0
         activationLastEvidenceUptime = nil
         scrollIntentGate = nil
-        activationTurnMonitor = nil
         velocityHistory.removeAll()
         scrollAccumulatorX = 0
         scrollAccumulatorY = 0
@@ -1253,16 +1334,7 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             gestureOutcome = "scroll:\(currentZone)"
 
             let acceptedDeltas = acceptedActivationDeltasForFlush()
-            if scrollAxis(for: currentZone) == .horizontal {
-                activationTurnMonitor = ScrollActivationTurnMonitor(
-                    axis: .horizontal,
-                    seed: acceptedDeltas.map {
-                        ScrollIntentGate.Sample(dx: $0.x, dy: $0.y)
-                    }
-                )
-            } else {
-                activationTurnMonitor = nil
-            }
+            horizontalExitMonitor = makeHorizontalExitMonitor(for: currentZone)
             seedVelocityHistoryFromActivation(acceptedDeltas: acceptedDeltas)
             for buffered in acceptedDeltas {
                 handleScroll(delta: buffered, zone: currentZone)
@@ -1468,6 +1540,14 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                    cornerInitialSampleContradicts(axis: axis) {
                     return .needMoreFrames
                 }
+                // 轉成水平捲動要是一段近乎水平的直線滑動，跟水平長條
+                // 本身的條件一致。
+                if axis == .horizontal,
+                   !ScrollIntentGate.cornerHorizontalPromotionQualifies(
+                       samples: samples
+                   ) {
+                    return .needMoreFrames
+                }
                 guard let promotedZone = axis == .horizontal ? adjacent.horizontal : adjacent.vertical else {
                     return .rejected
                 }
@@ -1588,36 +1668,151 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         }
     }
 
+    /// 只服務垂直邊緣。水平長條由 `HorizontalStripIntentGate` 判斷，不會走到
+    /// 這個緩衝式的 gate。
     private func makeScrollIntentGate(for zone: ScrollZone) -> ScrollIntentGate? {
-        guard let axis = scrollAxis(for: zone) else { return nil }
-        let configuration: ScrollIntentGate.Configuration
-        switch axis {
-        case .horizontal:
-            configuration = .horizontalEdge(maxSamples: activationSafetyMaxSamples)
-        case .vertical:
-            configuration = .init(maxSamples: activationSafetyMaxSamples)
-        }
-        return ScrollIntentGate(axis: axis, configuration: configuration)
+        guard scrollAxis(for: zone) == .vertical else { return nil }
+        return ScrollIntentGate(
+            axis: .vertical,
+            configuration: .init(maxSamples: activationSafetyMaxSamples)
+        )
     }
 
-    /// 水平捲動啟動後，若手指明顯改往另一軸移動，取消捲動並交回游標。
+    // MARK: - Horizontal Strip (pointer-first)
+
+    private func beginStripIntentEvaluation(
+        zone: ScrollZone,
+        position: CGPoint,
+        timestamp: Double,
+        eventUptime: Double
+    ) {
+        // 不走 isScrollActivationPending 那套緩衝流程，也不凍結游標：
+        // 在 gate 啟動之前，這次接觸就是一般的游標移動。
+        isScrollActivationPending = false
+        activationOriginalZone = zone
+        scrollIntentGate = nil
+        isActivelyScrollingInZone = false
+        isEvaluatingScrollCandidate = false
+        gestureOutcome = "strip-pending"
+
+        let landedAfterPointerActivity = pointerActivityRecency
+            .landedAfterPointerActivity(at: eventUptime)
+        var gate = HorizontalStripIntentGate(
+            side: zone == .topEdge ? .top : .bottom,
+            configuration: .init(stripDepth: bottomZoneHeight),
+            landedAfterPointerActivity: landedAfterPointerActivity
+        )
+        let decision = gate.observe(position: position, timestamp: timestamp)
+        stripIntentGate = gate
+        stripPointerOrigin = CGEvent(source: nil)?.location
+
+        LogManager.shared.log(String(
+            format: "Gesture %llu started at (%.3f, %.3f) zone=%@ [STRIP-PENDING afterPointer=%d required=%.3f/%.2fs]",
+            activeTouchSessionID ?? 0,
+            position.x,
+            position.y,
+            String(describing: zone),
+            landedAfterPointerActivity ? 1 : 0,
+            gate.requiredDistance,
+            gate.requiredDuration
+        ))
+        applyStripIntentDecision(decision, gate: gate)
+    }
+
+    private func applyStripIntentDecision(
+        _ decision: HorizontalStripIntentGate.Decision,
+        gate: HorizontalStripIntentGate
+    ) {
+        switch decision {
+        case .pending:
+            return
+
+        case .activate:
+            stripIntentGate = nil
+            horizontalExitMonitor = makeHorizontalExitMonitor(for: currentZone)
+            // 判斷期間的位移已經用在游標上，不補送成捲動；從這一幀之後
+            // 的位移才開始捲。
+            scrollAccumulatorX = 0
+            scrollAccumulatorY = 0
+            isActivelyScrollingInZone = true
+            gestureOutcome = "scroll:\(currentZone)"
+            // 判斷期間游標跟著手指走了一小段。確認是捲動後放回落指時的位置，
+            // 捲動事件才會送到原本游標底下的內容。Associate 是為了取消
+            // warp 之後預設 0.25 秒的滑鼠事件抑制。
+            if let origin = stripPointerOrigin {
+                CGWarpMouseCursorPosition(origin)
+                CGAssociateMouseAndMouseCursorPosition(1)
+            }
+            LogManager.shared.log(String(
+                format: "Scroll activated: %@ (strip) deltas=%d net=(%.4f,%.4f) required=%.3f/%.2fs afterPointer=%d",
+                String(describing: currentZone),
+                gate.windowDeltaCount,
+                gate.windowNet.x,
+                gate.windowNet.y,
+                gate.requiredDistance,
+                gate.requiredDuration,
+                gate.landedAfterPointerActivity ? 1 : 0
+            ))
+
+        case let .reject(reason):
+            stripIntentGate = nil
+            velocityHistory.removeAll()
+            let rejectedZone = currentZone
+            currentZone = .center
+            gestureOutcome = "strip-rejected:\(reason.rawValue)"
+            LogManager.shared.log(String(
+                format: "Strip scroll rejected → center (%@) zone=%@ deltas=%d net=(%.4f,%.4f) excursion=%.4f",
+                reason.rawValue,
+                String(describing: rejectedZone),
+                gate.windowDeltaCount,
+                gate.windowNet.x,
+                gate.windowNet.y,
+                gate.maximumExcursionFromTouchDown
+            ))
+        }
+    }
+
+    private func makeHorizontalExitMonitor(
+        for zone: ScrollZone
+    ) -> HorizontalScrollExitMonitor? {
+        switch zone {
+        case .bottomEdge:
+            return HorizontalScrollExitMonitor(
+                side: .bottom,
+                configuration: .init(stripDepth: bottomZoneHeight)
+            )
+        case .topEdge:
+            return HorizontalScrollExitMonitor(
+                side: .top,
+                configuration: .init(stripDepth: bottomZoneHeight)
+            )
+        default:
+            return nil
+        }
+    }
+
+    /// 水平捲動啟動後，手指離開長條或明顯轉向垂直時，取消捲動並交回游標。
     /// 這一幀不送捲動事件；mouseMoved 隨 `isActivelyScrollingInZone`
     /// 變成 false 恢復放行。
-    private func demoteActivatedScrollIfMovementTurned(delta: CGPoint) -> Bool {
-        guard var monitor = activationTurnMonitor else { return false }
+    private func demoteActivatedHorizontalScrollIfNeeded(
+        position: CGPoint,
+        delta: CGPoint
+    ) -> Bool {
+        guard var monitor = horizontalExitMonitor else { return false }
         guard isActivelyScrollingInZone,
-              scrollAxis(for: currentZone) == monitor.axis else {
+              isHorizontalZone(currentZone) else {
             return false
         }
 
-        let shouldDemote = monitor.observe(
-            ScrollIntentGate.Sample(dx: delta.x, dy: delta.y)
+        let reason = monitor.observe(
+            position: position,
+            delta: ScrollIntentGate.Sample(dx: delta.x, dy: delta.y)
         )
-        activationTurnMonitor = monitor.isExpired ? nil : monitor
-        guard shouldDemote else { return false }
+        horizontalExitMonitor = monitor
+        guard let reason else { return false }
 
         let demotedZone = currentZone
-        activationTurnMonitor = nil
+        horizontalExitMonitor = nil
         if hasEmittedScrollBegan {
             postScrollEvent(deltaX: 0, deltaY: 0, scrollPhase: 4, momentumPhase: 0)
         }
@@ -1629,12 +1824,11 @@ final class TrackpadZoneScroller: @unchecked Sendable {
         currentZone = .center
         gestureOutcome = "scroll-demoted:\(demotedZone)"
         LogManager.shared.log(String(
-            format: "Scroll demoted → center (movement turned) zone=%@ net=(%.4f,%.4f) path=(%.4f,%.4f) pixels=(%lld,%lld)",
+            format: "Scroll demoted → center (%@) zone=%@ position=(%.3f,%.3f) pixels=(%lld,%lld)",
+            reason.rawValue,
             String(describing: demotedZone),
-            monitor.metrics.rawNetX,
-            monitor.metrics.rawNetY,
-            monitor.metrics.normalizedPathX,
-            monitor.metrics.pathY,
+            position.x,
+            position.y,
             emittedScrollPixelsX,
             emittedScrollPixelsY
         ))
@@ -1794,6 +1988,12 @@ final class TrackpadZoneScroller: @unchecked Sendable {
             LogManager.shared.log("Single→Multi transition, cancelling scroll")
         }
         else if newCount == 0 {
+            if currentGestureMode == .multiFinger {
+                // 多指期間（常見的是手掌邊緣加手指）多半也在移游標。
+                pointerActivityRecency.recordPointerActivityEnd(
+                    at: CACurrentMediaTime()
+                )
+            }
             currentGestureMode = .idle
             requiresAllFingersLifted = false
         }
@@ -1808,6 +2008,11 @@ final class TrackpadZoneScroller: @unchecked Sendable {
     }
 
     func completeZeroTouchBoundary() {
+        if isContactQuarantinedUntilLift {
+            pointerActivityRecency.recordPointerActivityEnd(
+                at: CACurrentMediaTime()
+            )
+        }
         isContactQuarantinedUntilLift = false
         pretrackingInvalidTouchFrames = 0
         consecutiveInvalidTouchFrames = 0
@@ -1880,6 +2085,11 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                     timestamp: timestamp,
                     eventUptime: eventUptime
                 )
+                recordTraceFrame(
+                    x: x, y: y, state: state, timestamp: timestamp,
+                    density: density, majorAxis: majorAxis,
+                    minorAxis: minorAxis, isValid: true
+                )
             }
             if state >= 7 {
                 isContactQuarantinedUntilLift = false
@@ -1906,9 +2116,19 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 timestamp: timestamp,
                 eventUptime: eventUptime
             )
+            recordTraceFrame(
+                x: x, y: y, state: state, timestamp: timestamp,
+                density: density, majorAxis: majorAxis,
+                minorAxis: minorAxis, isValid: true
+            )
 
         case .tooLight:
             filteredLightTouchCount += 1
+            recordTraceFrame(
+                x: x, y: y, state: state, timestamp: timestamp,
+                density: density, majorAxis: majorAxis,
+                minorAxis: minorAxis, isValid: false
+            )
             handleInvalidTouchFrame(
                 x: x,
                 y: y,
@@ -1920,6 +2140,11 @@ final class TrackpadZoneScroller: @unchecked Sendable {
 
         case .tooLarge:
             filteredLargeTouchCount += 1
+            recordTraceFrame(
+                x: x, y: y, state: state, timestamp: timestamp,
+                density: density, majorAxis: majorAxis,
+                minorAxis: minorAxis, isValid: false
+            )
             handleInvalidTouchFrame(
                 x: x,
                 y: y,
@@ -1929,6 +2154,29 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                 detail: String(format: "major=%.3f minor=%.3f", majorAxis, minorAxis)
             )
         }
+    }
+
+    private func recordTraceFrame(
+        x: Float,
+        y: Float,
+        state: Int32,
+        timestamp: Double,
+        density: Float,
+        majorAxis: Float,
+        minorAxis: Float,
+        isValid: Bool
+    ) {
+        guard isTracking else { return }
+        GestureTraceRecorder.shared.append(
+            timestamp: timestamp,
+            x: x,
+            y: y,
+            state: state,
+            density: density,
+            majorAxis: majorAxis,
+            minorAxis: minorAxis,
+            isValid: isValid
+        )
     }
 
     private func handleInvalidTouchFrame(
@@ -1971,6 +2219,11 @@ final class TrackpadZoneScroller: @unchecked Sendable {
                     at: timestamp,
                     logReason: nil
                 )
+            }
+            if var gate = stripIntentGate {
+                let decision = gate.interrupt()
+                stripIntentGate = gate
+                applyStripIntentDecision(decision, gate: gate)
             }
 
             guard consecutiveInvalidTouchFrames >= invalidTouchFramesBeforeCancellation else {

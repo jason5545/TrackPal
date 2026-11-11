@@ -15,7 +15,8 @@ final class LogManager: @unchecked Sendable {
     private let maximumLogSize: UInt64 = 2 * 1024 * 1024
     private let dateFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss.SSS"
+        // 帶日期：日誌跨多天保留，沒有日期就分不出哪一天。
+        f.dateFormat = "MM-dd HH:mm:ss.SSS"
         return f
     }()
 

@@ -1605,114 +1605,40 @@ final class ScrollIntentGateTests: XCTestCase {
         )
     }
 
-    // MARK: - Horizontal edge configuration (2026-11-10 bottom-edge false triggers)
+    // MARK: - Corner → horizontal promotion (2026-11-11)
 
-    func testHorizontalEdgeIgnoresLogged24msMillimeterSlide() {
-        // Gesture 4343: three samples, net (0.0054,-0.0007), path (0.0086,0.0022)
-        // activated a bottom-edge scroll under the default thresholds.
-        let samples: [(CGFloat, CGFloat)] = [(0.0018, -0.0007), (0.0018, 0.0), (0.0018, 0.0)]
+    func testCornerHorizontalPromotionRejectsMillimeterSlide() {
+        // 舊門檻下，角落只要水平淨位移 0.008 就轉成水平捲動。
+        let samples: [ScrollIntentGate.Sample] = [
+            .init(dx: 0.003, dy: 0.0002),
+            .init(dx: 0.003, dy: 0.0002),
+            .init(dx: 0.003, dy: 0.0002)
+        ]
 
-        var defaultGate = ScrollIntentGate(axis: .horizontal)
-        var edgeGate = ScrollIntentGate(
-            axis: .horizontal,
-            configuration: .horizontalEdge(maxSamples: 24)
-        )
-        var defaultDecision: ScrollIntentGate.Decision = .pending
-        var edgeDecision: ScrollIntentGate.Decision = .pending
-        for (dx, dy) in samples {
-            defaultDecision = defaultGate.observe(deltaX: dx, deltaY: dy)
-            edgeDecision = edgeGate.observe(deltaX: dx, deltaY: dy)
-        }
-
-        XCTAssertEqual(defaultDecision, .activate(axis: .horizontal))
-        XCTAssertEqual(edgeDecision, .pending)
-    }
-
-    func testHorizontalEdgeStillActivatesDeliberateSlide() {
-        var gate = ScrollIntentGate(
-            axis: .horizontal,
-            configuration: .horizontalEdge(maxSamples: 24)
-        )
-
-        XCTAssertEqual(gate.observe(deltaX: 0.004, deltaY: 0.0003), .pending)
-        XCTAssertEqual(gate.observe(deltaX: 0.004, deltaY: 0.0003), .pending)
-        XCTAssertEqual(
-            gate.observe(deltaX: 0.004, deltaY: 0.0003),
-            .activate(axis: .horizontal)
+        XCTAssertFalse(
+            ScrollIntentGate.cornerHorizontalPromotionQualifies(samples: samples)
         )
     }
 
-    func testHorizontalEdgeFastPathNeedsStrongTwoSampleSlide() {
-        var gate = ScrollIntentGate(
-            axis: .horizontal,
-            configuration: .horizontalEdge(maxSamples: 24)
+    func testCornerHorizontalPromotionAcceptsStraightSlide() {
+        let samples = Array(
+            repeating: ScrollIntentGate.Sample(dx: -0.004, dy: 0.0005),
+            count: 9
         )
 
-        // First sample is winsorized to 0.008 physical; second must carry the rest.
-        XCTAssertEqual(gate.observe(deltaX: 0.010, deltaY: 0), .pending)
-        XCTAssertEqual(
-            gate.observe(deltaX: 0.011, deltaY: 0),
-            .activate(axis: .horizontal)
+        XCTAssertTrue(
+            ScrollIntentGate.cornerHorizontalPromotionQualifies(samples: samples)
         )
     }
 
-    // MARK: - Post-activation turn monitor
-
-    func testTurnMonitorDemotesLoggedUpwardCursorMove() {
-        // Gesture 3661: activated at net (-0.0051,0.0035), then the finger
-        // travelled 0.336 upward while only ~0.07 sideways.
-        var monitor = ScrollActivationTurnMonitor(
-            axis: .horizontal,
-            seed: [
-                .init(dx: -0.0017, dy: 0.0012),
-                .init(dx: -0.0017, dy: 0.0012),
-                .init(dx: -0.0017, dy: 0.0011)
-            ]
+    func testCornerHorizontalPromotionRejectsDiagonalSlide() {
+        let samples = Array(
+            repeating: ScrollIntentGate.Sample(dx: -0.004, dy: 0.004),
+            count: 12
         )
 
-        var demoted = false
-        var frames = 0
-        while !demoted, frames < 20 {
-            demoted = monitor.observe(.init(dx: -0.0015, dy: 0.008))
-            frames += 1
-        }
-
-        XCTAssertTrue(demoted)
-        XCTAssertLessThanOrEqual(frames, 5)
-        XCTAssertFalse(monitor.isExpired)
-    }
-
-    func testTurnMonitorKeepsDeliberateHorizontalScroll() {
-        var monitor = ScrollActivationTurnMonitor(axis: .horizontal)
-
-        for _ in 0..<40 {
-            XCTAssertFalse(monitor.observe(.init(dx: 0.004, dy: 0.0012)))
-        }
-    }
-
-    func testTurnMonitorExpiresAfterScrollIsEstablished() {
-        var monitor = ScrollActivationTurnMonitor(axis: .horizontal)
-
-        // Long back-and-forth horizontal scroll: net horizontal returns to zero.
-        for _ in 0..<10 {
-            XCTAssertFalse(monitor.observe(.init(dx: 0.004, dy: 0)))
-        }
-        for _ in 0..<10 {
-            XCTAssertFalse(monitor.observe(.init(dx: -0.004, dy: 0)))
-        }
-        XCTAssertTrue(monitor.isExpired)
-
-        // Vertical drift late in an established scroll never demotes it.
-        for _ in 0..<10 {
-            XCTAssertFalse(monitor.observe(.init(dx: 0, dy: 0.006)))
-        }
-    }
-
-    func testTurnMonitorIgnoresSmallVerticalWobble() {
-        var monitor = ScrollActivationTurnMonitor(axis: .horizontal)
-
-        XCTAssertFalse(monitor.observe(.init(dx: 0.002, dy: 0.010)))
-        XCTAssertFalse(monitor.observe(.init(dx: 0.002, dy: 0.010)))
-        XCTAssertFalse(monitor.observe(.init(dx: 0.002, dy: -0.010)))
+        XCTAssertFalse(
+            ScrollIntentGate.cornerHorizontalPromotionQualifies(samples: samples)
+        )
     }
 }
