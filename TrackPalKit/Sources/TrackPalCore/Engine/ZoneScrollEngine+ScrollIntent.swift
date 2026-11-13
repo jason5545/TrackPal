@@ -268,7 +268,6 @@ extension ZoneScrollEngine {
             contact.pendingForceEvaluations.removeAll()
             contact.activeScrollRecoveryKind = nil
             contact.scrollRecoveryStartedUptime = nil
-            contact.shouldReplayPendingPrimaryClick = false
             contact.isScrollActivationPending = false
             isActivelyScrollingInZone = true
             isEvaluatingScrollCandidate = false

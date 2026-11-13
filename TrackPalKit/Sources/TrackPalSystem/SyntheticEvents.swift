@@ -100,6 +100,50 @@ public enum SyntheticEvents {
         return (down, up)
     }
 
+    /// 建立單一個滑鼠按鍵事件（不送出）。只用在把攔下來的原生 down 或 up
+    /// 單獨補送回去；一般的點擊請用成對的 `makeMousePair`。
+    public static func makeMouseEvent(
+        type: CGEventType,
+        at location: CGPoint,
+        button: CGMouseButton,
+        flags: CGEventFlags = [],
+        clickState: Int64 = 1
+    ) -> CGEvent? {
+        guard let event = CGEvent(
+            mouseEventSource: CGEventSource(stateID: .combinedSessionState),
+            mouseType: type,
+            mouseCursorPosition: location,
+            mouseButton: button
+        ) else {
+            return nil
+        }
+        event.flags = flags
+        event.setIntegerValueField(.mouseEventClickState, value: clickState)
+        event.setIntegerValueField(.eventSourceUserData, value: signature)
+        return event
+    }
+
+    @discardableResult
+    public static func postMouseEvent(
+        type: CGEventType,
+        at location: CGPoint,
+        button: CGMouseButton,
+        flags: CGEventFlags = [],
+        clickState: Int64 = 1
+    ) -> Bool {
+        guard let event = makeMouseEvent(
+            type: type,
+            at: location,
+            button: button,
+            flags: flags,
+            clickState: clickState
+        ) else {
+            return false
+        }
+        event.post(tap: .cghidEventTap)
+        return true
+    }
+
     @discardableResult
     public static func postMousePair(
         downType: CGEventType,

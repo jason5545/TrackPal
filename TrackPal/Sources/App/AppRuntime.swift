@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import QuartzCore
 import TrackPalCore
 import TrackPalSystem
 
@@ -28,10 +29,26 @@ final class AppRuntime {
         let settings = SettingsStore(log: { logger.log($0) })
         self.settings = settings
 
+        // 校正用的原生捲動記錄，預設關閉（見 NativeScrollRecorder）。
+        let nativeScrollRecorder = NativeScrollRecorder(
+            isEnabled: UserDefaults.standard.bool(
+                forKey: NativeScrollRecorder.defaultsKey
+            )
+        )
+        if nativeScrollRecorder.isEnabled {
+            logger.log("Native scroll reference recording is ON → \(nativeScrollRecorder.fileURL.path)")
+        }
+
         let suppression = ScrollSuppressionState()
+        // 壓力 callback 寫、event tap 讀：沒有按壓力道的左鍵（輕點點按）不攔。
+        let pressEvidence = PressEvidence()
         let interceptor = ScrollEventInterceptor(
             suppression: suppression,
-            log: { logger.log($0) }
+            log: { logger.log($0) },
+            foreignScrollObserver: { event in
+                nativeScrollRecorder.recordScroll(event, uptime: CACurrentMediaTime())
+            },
+            pressEvidence: pressEvidence
         )
         // 手指跟隨的捲動與慣性共用同一個出口。
         let scrollPoster = ScrollEventPoster()
@@ -52,7 +69,12 @@ final class AppRuntime {
         self.interceptor = interceptor
         self.inertia = inertia
         self.engine = engine
-        devices = MultitouchDeviceManager(engine: engine, logger: logger)
+        devices = MultitouchDeviceManager(
+            engine: engine,
+            logger: logger,
+            nativeScrollRecorder: nativeScrollRecorder,
+            pressEvidence: pressEvidence
+        )
 
         settings.onConfigurationChange = { [engine] configuration in
             engine.configuration = configuration

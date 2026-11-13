@@ -19,6 +19,12 @@ let usage = """
       軌跡檔沒有逐筆壓力與多指資料，角落、中鍵區的壓力是照最大值合成的，
       這一類的結果僅供參考。
 
+  trackpal-replay native [<記錄檔>]
+      跟原生雙指捲動對帳：把 NativeScrollRecorder 錄到的雙指軌跡當成單指在
+      右側邊緣的滑動，丟進狀態機（靈敏度 1.0），比較接觸段與慣性的捲動量
+      跟系統當時實際送出的差多少。記錄檔預設是
+      ~/Library/Logs/TrackPal.native-scroll.jsonl。
+
   trackpal-replay transcript fuzz <起始 seed> <結束 seed> <輸出檔>
   trackpal-replay transcript traces <每段幾筆> <輸出檔> [--dir <資料夾>]
       把狀態機對外做的每一件事寫成文字檔。重構前後各跑一次再 diff，
@@ -47,7 +53,7 @@ if let index = arguments.firstIndex(of: "--dir") {
 let summaryOnly = arguments.contains("--summary")
 arguments.removeAll { $0 == "--summary" }
 
-let command = arguments.first.flatMap { ["strip", "engine", "transcript"].contains($0) ? $0 : nil } ?? "strip"
+let command = arguments.first.flatMap { ["strip", "engine", "transcript", "native"].contains($0) ? $0 : nil } ?? "strip"
 if arguments.first == command { arguments.removeFirst() }
 
 func pad(_ text: String, _ width: Int) -> String {
@@ -177,6 +183,115 @@ case "engine":
         }
     }
     printTable(table, title: "--- 起步區域 當時的結果 → 重播")
+
+case "native":
+    let path = arguments.first ?? FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Logs/TrackPal.native-scroll.jsonl").path
+    guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
+        fail("讀不到 \(path)")
+    }
+
+    struct NativeSession {
+        var frames: [(uptime: Double, y: Double)] = []      // 雙指的質心
+        var contactPixels = 0.0
+        var momentumPixels = 0.0
+        var hasLifted = false
+    }
+    var sessions: [NativeSession] = []
+    var current = NativeSession()
+    for line in text.split(separator: "\n") {
+        guard let record = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+              let kind = record["k"] as? String, let uptime = record["u"] as? Double else {
+            continue
+        }
+        switch kind {
+        case "f":
+            if current.hasLifted {
+                sessions.append(current)
+                current = NativeSession()
+            }
+            if let points = record["p"] as? [[Double]], points.count == 2 {
+                current.frames.append((uptime, (points[0][1] + points[1][1]) / 2))
+            }
+        case "z":
+            current.hasLifted = true
+        case "s":
+            let pixels = abs(record["py"] as? Double ?? 0)
+            let momentum = record["mo"] as? Int ?? 0
+            if momentum == 0 {
+                current.contactPixels += pixels
+            } else if momentum == 1 || momentum == 2 {
+                current.momentumPixels += pixels
+            }
+        default:
+            break
+        }
+    }
+    if !current.frames.isEmpty { sessions.append(current) }
+    sessions = sessions.filter { $0.frames.count >= 8 && $0.contactPixels > 0 }
+    guard !sessions.isEmpty else { fail("記錄檔裡沒有可用的雙指捲動") }
+
+    var settings = EngineScenario.Settings()
+    settings.scrollMultiplier = 1
+    settings.bottomZoneHeight = 0.10
+    settings.middleClickEnabled = false
+    settings.cornerTriggerEnabled = false
+
+    var nativeContact = 0.0, nativeMomentum = 0.0
+    var engineContact = 0.0, engineMomentum = 0.0
+    var ratios: [Double] = []
+    var nativeOnly = 0, engineOnly = 0
+    for session in sessions {
+        // 軌跡平移到觸控板中段，避開上下的區域；只取垂直分量。
+        let origin = session.frames[0]
+        var events: [EngineScenario.Event] = []
+        for (index, frame) in session.frames.enumerated() {
+            let time = 100 + frame.uptime - origin.uptime
+            let y = min(0.88, max(0.12, 0.5 + frame.y - origin.y))
+            events.append(.touch(.init(
+                timestamp: time, uptime: time + 1_000, count: 1,
+                x: 0.95, y: Float(y), state: index == 0 ? 2 : 4,
+                density: 0.2, majorAxis: 8, minorAxis: 6.5
+            )))
+        }
+        let end = 100 + session.frames[session.frames.count - 1].uptime - origin.uptime + 0.008
+        events.append(.touch(.init(timestamp: end, uptime: end + 1_000, count: 0)))
+
+        var contact = 0.0, momentum = 0.0
+        for line in EngineScenarioRunner.run(EngineScenario(name: "native", settings: settings, events: events)) {
+            let fields = line.split(separator: " ")
+            if fields.first == "scroll", fields.count == 5 {
+                contact += abs(Double(fields[2]) ?? 0)
+            } else if fields.first == "inertia-start", fields.count == 3 {
+                let speed = abs(Double(fields[2]) ?? 0)
+                momentum = max(0, NativeScrollCurve.momentumTimeConstant
+                    * (speed - Double(NativeScrollCurve.momentumStopSpeed)))
+            }
+        }
+
+        nativeContact += session.contactPixels
+        nativeMomentum += session.momentumPixels
+        engineContact += contact
+        engineMomentum += momentum
+        if session.momentumPixels > 0, momentum == 0 { nativeOnly += 1 }
+        if session.momentumPixels == 0, momentum > 0 { engineOnly += 1 }
+        if session.momentumPixels > 0, momentum > 0 {
+            ratios.append((contact + momentum) / (session.contactPixels + session.momentumPixels))
+        }
+    }
+    ratios.sort()
+    func quantile(_ q: Double) -> Double {
+        ratios.isEmpty ? .nan : ratios[Int(q * Double(ratios.count - 1))]
+    }
+    print("雙指捲動 \(sessions.count) 次；同樣的手指軌跡，原生實際送出 → 狀態機（靈敏度 1.0）")
+    print(String(format: "  接觸段  %6.0f px → %6.0f px（%.2f 倍）", nativeContact, engineContact, engineContact / nativeContact))
+    print(String(format: "  慣性    %6.0f px → %6.0f px（%.2f 倍）", nativeMomentum, engineMomentum, engineMomentum / max(nativeMomentum, 1)))
+    print(String(format: "  合計    %6.0f px → %6.0f px（%.2f 倍）", nativeContact + nativeMomentum, engineContact + engineMomentum,
+                 (engineContact + engineMomentum) / (nativeContact + nativeMomentum)))
+    print(String(format: "  兩邊都有慣性的 %d 次，每次合計的比值：P25 %.2f  中位數 %.2f  P75 %.2f",
+                 ratios.count, quantile(0.25), quantile(0.5), quantile(0.75)))
+    print("  原生有慣性、狀態機沒有：\(nativeOnly) 次；原生沒有、狀態機有：\(engineOnly) 次")
+    print("  （原生要先認出雙指捲動才開始送，起步那一小段不捲；狀態機沒有這段，所以接觸段會偏多。）")
 
 case "transcript":
     guard let kind = arguments.first, let outputPath = arguments.last,

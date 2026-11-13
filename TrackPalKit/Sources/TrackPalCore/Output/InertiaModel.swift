@@ -1,27 +1,17 @@
 import CoreGraphics
 
-/// 放開後的慣性捲動：每個 tick 把速度乘上固定的衰減，換成像素送出去。
+/// 放開後的慣性捲動：速度（像素／秒）隨時間指數衰減，每一格送出這段時間走過
+/// 的像素，不足一個像素的零頭累加到下一格。
 ///
-/// 純計算，不知道 display link 存在。一個 tick 對應螢幕更新一次；這跟
-/// 2026-01 以來的行為一致（衰減量是以 16.67 ms 一格算的，在 120 Hz 螢幕上
-/// 每秒跑 120 格），改成依實際時間計算會改變手感，所以沒有動。
+/// 純計算，不知道 display link 存在；呼叫端告訴它這一格過了多久，所以滑行的
+/// 距離與時間跟螢幕更新率無關。時間常數與停止速度來自原生雙指捲動的實測
+/// （`NativeScrollCurve`）。
 public struct InertiaModel: Sendable, Equatable {
-    /// 兩軸速度都低於這個值就停。
-    public var minimumVelocity: CGFloat = 2.0
+    /// 兩軸速度都低於這個值（px/s）就停。
+    public var stopSpeed: CGFloat = NativeScrollCurve.momentumStopSpeed
 
-    /// 每毫秒的衰減率與假設的一格時間。
-    static let decelerationRate: CGFloat = 0.998
-    static let frameIntervalMilliseconds: CGFloat = 16.67
-    static let decayPerTick = pow(decelerationRate, frameIntervalMilliseconds)
-
-    /// 速度換成每個 tick 送出的像素。
-    ///
-    /// 2026-11-13 以前是直接送出速度的整數部分，但事件被系統量化成「每 10
-    /// 換 8 px、最少 8 px」：速度 20 以上實際送出約 0.8 倍，20 以下則固定每格
-    /// 8 px，一路滑到速度低於門檻才突然停。改成逐像素後用 0.8 倍：起始速度
-    /// 接近原本，總距離是原本的 0.8–1.04 倍（輕輕一撥的短一些），並且是平滑
-    /// 減速到停。不足一個像素的零頭累加到下一格。
-    static let pixelsPerVelocityUnit: CGFloat = 0.8
+    /// 速度衰減的時間常數（秒）。
+    public var timeConstant: Double = NativeScrollCurve.momentumTimeConstant
 
     public private(set) var velocityX: CGFloat = 0
     public private(set) var velocityY: CGFloat = 0
@@ -43,7 +33,7 @@ public struct InertiaModel: Sendable, Equatable {
         case finished(emitTerminal: Bool)
     }
 
-    /// 以新的速度開始滑；非有限值直接忽略。
+    /// 以新的速度（px/s）開始滑；非有限值直接忽略。
     @discardableResult
     public mutating func start(velocityX: CGFloat, velocityY: CGFloat) -> Bool {
         guard velocityX.isFinite, velocityY.isFinite else { return false }
@@ -68,21 +58,24 @@ public struct InertiaModel: Sendable, Equatable {
         return emitTerminal
     }
 
-    public mutating func tick() -> Tick {
+    /// 往前推進 `elapsed` 秒。
+    public mutating func tick(elapsed: Double) -> Tick {
         guard isScrolling else { return .idle }
+        guard elapsed.isFinite, elapsed > 0 else { return .coasting }
 
-        velocityX *= Self.decayPerTick
-        velocityY *= Self.decayPerTick
+        let decay = CGFloat(exp(-elapsed / max(timeConstant, 0.001)))
+        velocityX *= decay
+        velocityY *= decay
 
-        if abs(velocityX) < minimumVelocity, abs(velocityY) < minimumVelocity {
+        if abs(velocityX) < stopSpeed, abs(velocityY) < stopSpeed {
             return .finished(emitTerminal: stop())
         }
 
         let deltaX = Self.takePixels(
-            from: &residualX, adding: velocityX * Self.pixelsPerVelocityUnit
+            from: &residualX, adding: velocityX * CGFloat(elapsed)
         )
         let deltaY = Self.takePixels(
-            from: &residualY, adding: velocityY * Self.pixelsPerVelocityUnit
+            from: &residualY, adding: velocityY * CGFloat(elapsed)
         )
         guard deltaX != 0 || deltaY != 0 else { return .coasting }
 

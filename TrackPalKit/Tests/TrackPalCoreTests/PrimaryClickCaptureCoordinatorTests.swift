@@ -63,18 +63,70 @@ struct PrimaryClickCaptureCoordinatorTests {
         #expect(up.shouldSuppress && up.replay == nil)
     }
 
-    @Test("放開時只收到 down：等到對應的 up 才補送完整的一組")
-    func partialPairResolvesOnMatchingUp() {
+    @Test("定案時 down 還按著：先把 down 放出去，之後的 up 交給呼叫端補送")
+    func heldDownIsReleasedAndItsUpReposted() {
         var coordinator = Coordinator()
         coordinator.begin(token: 2, gestureTimestamp: 1_000, receivedAt: 1_000)
         _ = coordinator.capture(.leftMouseDown, eventTimestamp: 1_100, receivedAt: 1_100) { snapshot(7) }
 
         let atFinish = coordinator.finish(token: 2, replayCapturedClick: true, gestureTimestamp: 1_200, receivedAt: 1_200)
+        #expect(atFinish == PrimaryClickReplay(
+            token: 2, expectedPairCount: 0, snapshots: [], releasedDown: snapshot(7)
+        ))
+
+        // 拖了很久才放開也一樣：這個 up 不會過期。
+        let up = coordinator.capture(.leftMouseUp, eventTimestamp: 9_000_000_000, receivedAt: 9_000_000_000) { snapshot() }
+        #expect(up.shouldSuppress)
+        #expect(up.repostUp)
+        #expect(up.replay == nil)
+
+        // 之後回到什麼都不攔。
+        let next = coordinator.capture(.leftMouseDown, eventTimestamp: 9_100_000_000, receivedAt: 9_100_000_000) { snapshot() }
+        #expect(!next.shouldSuppress && !next.repostUp)
+    }
+
+    @Test("先完成一組、第二下還按著：整組先補送，再放出 down")
+    func completedPairThenHeldDown() {
+        var coordinator = Coordinator()
+        coordinator.begin(token: 5, gestureTimestamp: 1_000, receivedAt: 1_000)
+        _ = coordinator.capture(.leftMouseDown, eventTimestamp: 1_100, receivedAt: 1_100) { snapshot(1) }
+        _ = coordinator.capture(.leftMouseUp, eventTimestamp: 1_150, receivedAt: 1_150) { snapshot() }
+        _ = coordinator.capture(.leftMouseDown, eventTimestamp: 1_300, receivedAt: 1_300) { snapshot(2) }
+
+        let replay = coordinator.finish(token: 5, replayCapturedClick: true, gestureTimestamp: 1_400, receivedAt: 1_400)
+        #expect(replay == PrimaryClickReplay(
+            token: 5, expectedPairCount: 1, snapshots: [snapshot(1)], releasedDown: snapshot(2)
+        ))
+    }
+
+    @Test("壓力動作觸發時 down 還按著：down 丟掉，它的 up 也吃掉")
+    func heldDownIsDroppedAfterForceAction() {
+        var coordinator = Coordinator()
+        coordinator.begin(token: 3, gestureTimestamp: 1_000, receivedAt: 1_000)
+        _ = coordinator.capture(.leftMouseDown, eventTimestamp: 1_100, receivedAt: 1_100) { snapshot() }
+
+        let atFinish = coordinator.finish(token: 3, replayCapturedClick: false, gestureTimestamp: 1_200, receivedAt: 1_200)
         #expect(atFinish == nil)
 
         let up = coordinator.capture(.leftMouseUp, eventTimestamp: 1_250, receivedAt: 1_250) { snapshot() }
         #expect(up.shouldSuppress)
-        #expect(up.replay == PrimaryClickReplay(token: 2, expectedPairCount: 1, snapshots: [snapshot(7)]))
+        #expect(!up.repostUp)
+        #expect(up.replay == nil)
+    }
+
+    @Test("攔到的事件時間比接觸結束還晚：照樣收尾，不會留著吃掉之後的點擊")
+    func eventsStampedAfterGestureEndStillResolve() {
+        var coordinator = Coordinator()
+        coordinator.begin(token: 4, gestureTimestamp: 1_000, receivedAt: 1_000)
+        _ = coordinator.capture(.leftMouseDown, eventTimestamp: 1_500, receivedAt: 1_500) { snapshot(9) }
+        _ = coordinator.capture(.leftMouseUp, eventTimestamp: 1_600, receivedAt: 1_600) { snapshot() }
+
+        // 接觸的結束時間（1_200）比這組點擊早。
+        let replay = coordinator.finish(token: 4, replayCapturedClick: true, gestureTimestamp: 1_200, receivedAt: 1_700)
+        #expect(replay == PrimaryClickReplay(token: 4, expectedPairCount: 1, snapshots: [snapshot(9)]))
+
+        let next = coordinator.capture(.leftMouseDown, eventTimestamp: 2_000, receivedAt: 2_000) { snapshot() }
+        #expect(!next.shouldSuppress)
     }
 
     @Test("上一次接觸的攔截不會搶走下一次接觸的點擊")
@@ -136,5 +188,20 @@ struct PrimaryClickCaptureCoordinatorTests {
     ])
     func monotonicNanoseconds(uptime: Double, expected: UInt64) {
         #expect(Coordinator.monotonicNanoseconds(fromSystemUptime: uptime, fallback: 777) == expected)
+    }
+
+    @Test("mach 刻度換算成奈秒", arguments: [
+        // Apple Silicon：一格 125/3 奈秒。
+        (UInt64(3), UInt32(125), UInt32(3), UInt64(125)),
+        (UInt64(4_854_000_000_000), UInt32(125), UInt32(3), UInt64(202_250_000_000_000)),
+        // Intel：一格就是一奈秒。
+        (UInt64(123_456), UInt32(1), UInt32(1), UInt64(123_456)),
+        // 不合理的 timebase 原樣回傳，不除以零。
+        (UInt64(500), UInt32(0), UInt32(0), UInt64(500)),
+        // 溢位時封頂。
+        (UInt64.max, UInt32(125), UInt32(3), UInt64.max),
+    ])
+    func machTicksToNanoseconds(ticks: UInt64, numer: UInt32, denom: UInt32, expected: UInt64) {
+        #expect(Coordinator.nanoseconds(fromMachTicks: ticks, numer: numer, denom: denom) == expected)
     }
 }

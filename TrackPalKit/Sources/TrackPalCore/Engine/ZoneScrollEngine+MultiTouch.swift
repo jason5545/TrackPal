@@ -108,10 +108,13 @@ extension ZoneScrollEngine {
 
     func cancelActiveScrolling(reason: GestureCancellationReason = .cancelled) {
         contact.gestureOutcome = .cancelled(reason)
-        contact.shouldReplayPendingPrimaryClick = false
         contact.forceGestureDisqualified = true
         contact.pendingForceEvaluations.removeAll()
-        resolvePendingPrimaryClick(replayCapturedClick: false)
+        // 只有壓力動作真的觸發過，才把同一下的原生左鍵丟掉；其餘的取消
+        // （多指、過濾、停用）照原樣放行。
+        resolvePendingPrimaryClick(
+            replayCapturedClick: !contact.forceActionTriggered
+        )
 
         // Send scroll phase ended if we had started tracking
         if contact.hasEmittedScrollBegan {

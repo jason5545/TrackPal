@@ -69,11 +69,12 @@ struct ContactScript {
         clock += seconds
     }
 
-    /// 在目前時間送一筆壓力樣本。
-    mutating func force(_ value: Float) {
+    /// 送一筆壓力樣本。`hardwareTime` 預設是目前時間；給比較早的值可以模擬
+    /// 壓力事件流比觸控幀晚送達。
+    mutating func force(_ value: Float, at hardwareTime: Double? = nil) {
         events.append(.force(.init(
             device: device,
-            rawTimestamp: clock * 1_000,
+            rawTimestamp: (hardwareTime ?? clock) * 1_000,
             uptime: uptime,
             x: Float(x),
             y: Float(y),

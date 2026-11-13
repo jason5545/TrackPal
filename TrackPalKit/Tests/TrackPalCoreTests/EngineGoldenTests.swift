@@ -12,6 +12,9 @@ import Testing
 /// 指紋隨之更新；那次改動前後，21,538 次接觸與 3,758 筆實機軌跡的判定結果
 /// 沒有任何一筆不同，變的只有捲動的像素數量與連帶的紀錄。
 ///
+/// 接著照原生雙指捲動的實測換掉增益與慣性（`NativeScrollCurve`），指紋再更新
+/// 一次；同樣驗過那兩批輸入的判定結果沒有任何一筆不同。
+///
 /// 之後任何重構只要讓指紋變了，就代表某個可觀察的行為（或日誌文字）改了。
 ///
 /// 刻意改行為或改日誌格式時，用下面的指令印出新的指紋，貼回 `expected`：
@@ -24,22 +27,22 @@ struct EngineGoldenTests {
 
     static let expected: [String] = [
         // GOLDEN-BEGIN
-        "9115a7763c53a9e2e2e3b9f0202b6ba25e8f5a9b79f350ab517e2194dca38c28",
-        "170a1ee205d3638ef59abacae648bcd67e96ee3cbf37ee643e4b20b4d8ed1781",
-        "ae7a40c2f00970d7e32794f64789b5723f242e80ca0160f375cddc297ffd336e",
-        "b2998aed6c0e1e484ae89e3c36bae22275949fab7d3152685a3dc134bf0a8fa5",
-        "6a335af3198c9fb5fa0351d6b97b6dd21e646ccb5603dc6c8428b1518a307d5a",
-        "add8139155ddde86811402a65c3af44c7620de06ad2acdb368d5f4f031bb6cc1",
-        "e6726827a4c4f6d114494b30e6551fba7f30cbb4061e7311590aba43eddcce30",
-        "e0401540e210c6a982ea6cc3161cf87f694d30eccb61dfa31568e140cffb9a42",
-        "7aaf31b4cc6811fdba536e96ad96fb2c6ce38571b03be2d275f6aed1ffd54c91",
-        "d04b476097f28121301d177400ca411571481b79b5873e8fb91e836d56e323a1",
-        "ca1dd318dc740c5c6e04f29d2b69302057b3f67c45cb68c3779bc25b87170dc1",
-        "c4f5b80cfcfb25aed42d6c95c6427ca553b5fd10f0696466a5f89f0d0e4773a3",
-        "8be1e25b8f71375f7cf8d8935084a8d0adcf18578c9af8534bd69aa66ef9626a",
-        "bdee269c3c5b05ce5f4f763b413012c2b1f9ae1d5a0a7dc65328345e617177a4",
-        "86b5c4018d49be003cc211d1e6734070687d9b3b0f007100284c7d32fbbcf52e",
-        "d7cbce4e114652b8c77d35e3a1c17311f76e078048c70c296ecb9a38f5d448f3",
+        "704a9660beb7a74a79088ddf86f14ab133fb58fef408cd3a688d12bad5fab4b0",
+        "a261ed8ce29159cb3d8be97defb05cdfa1a6500127b8c8060984a0793dbf3a37",
+        "f0c48d86d29b2b4b4d2979eafe3e5d88f02362006bd97e30b82cac1112da7d78",
+        "3f10bec88d0e99107da18715a30d30f1aeb5c961f4a12f327216fc300b65cf19",
+        "1f46a51661a5aea051d5f9cebfdeceec42bb68f352c0db8413e5cc77b8b45b3a",
+        "456cf06de1079fca2803ab2c0d12ec937909a83f20e7e095dd6c8167b9c0f0a2",
+        "2db0af8166654595b623129327fdb4e31128826a4b406bfdad4acce9b7ab308a",
+        "840cd9445dcece519e88ee38c217b67da4fc914ada22c4ff3561ea3c0d1f95da",
+        "ef5cca900442f9a662c89e6c8d13491f0f7445a5cbaec8f04f38549ebf560479",
+        "02aec00c9a076dfc0e1e558895c69f71356c3f17d8807dd4fe3360cc2ea3c3b9",
+        "bfbb15230bf60ac6ea7150e5fb41855a89dc2e571c835414c95c26360bd51a91",
+        "7489b43ca4d31ba0216b612d13fc6f87d10ba0da7fcbf9a1b2dbae96f233ddec",
+        "4fce532662440f7346d4a4d1065615487b5a25390053a2c8fad880befe51f908",
+        "b6cde6026e4dcacd33a13949044f0b014b909fd14f2dc37b11f1fac6d76a920f",
+        "7d71cf7eda7020f63ae967e1a0bb8e7cd4efa1697d4fa97edfa38c44a61456da",
+        "0c841870ca8138b474ba03612a43dcc55ee32022a1b0c50a8b56838d1e4cc2c4",
         // GOLDEN-END
     ]
 

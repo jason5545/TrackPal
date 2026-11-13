@@ -37,33 +37,103 @@ struct EngineBehaviorTests {
         #expect(result.totalScrollY > 0)
     }
 
-    @Test("捲動量 = 位移 × 靈敏度 × 800，次像素不會丟掉")
-    func scrollDistanceMatchesMultiplier() {
+    @Test("捲動量照原生的增益：0.5 個觸控板高／秒滑過 0.2，約 112 px；靈敏度 3 就是三倍")
+    func scrollDistanceMatchesNativeGain() {
         var script = ContactScript()
         script.down(0.95, 0.3)
-        script.move(dx: 0, dy: 0.004, frames: 50)   // 共 0.2
+        script.move(dx: 0, dy: 0.004, frames: 50)   // 共 0.2，速度 0.5/秒
+        script.hold(frames: 8)                      // 停住再放開，不帶慣性
         script.lift()
 
         let atOne = script.run { $0.scrollMultiplier = 1 }
         let atThree = script.run { $0.scrollMultiplier = 3 }
 
-        // 0.2 × 800 = 160 px；最後不足一個像素的零頭留在累加器裡。
-        #expect((-160 ... -159).contains(atOne.totalScrollY))
-        #expect((-480 ... -479).contains(atThree.totalScrollY))
+        // 0.2 × (500 + 119 × 0.5) = 111.9。啟動那幾幀用的是預設速度，容許幾個像素。
+        #expect((-116 ... -108).contains(atOne.totalScrollY))
+        #expect((-348 ... -324).contains(atThree.totalScrollY))
+        #expect(atOne.count(prefix: "inertia-start") == 0)
+    }
+
+    @Test("滑得快，每單位位移捲動得略多（原生的加速很溫和）")
+    func fasterStrokesScrollSlightlyMore() {
+        func distance(perFrame: Double, frames: Int) -> Int {
+            var script = ContactScript()
+            script.down(0.95, 0.2)
+            script.move(dx: 0, dy: perFrame, frames: frames)
+            script.hold(frames: 8)
+            script.lift()
+            return abs(script.run { $0.scrollMultiplier = 1 }.totalScrollY)
+        }
+        let slow = distance(perFrame: 0.002, frames: 150)    // 0.25/秒，共 0.3
+        let fast = distance(perFrame: 0.012, frames: 25)     // 1.5/秒，共 0.3
+        #expect(fast > slow)
+        #expect(Double(fast) / Double(slow) < 1.45)
     }
 
     @Test("慢慢滑也是逐像素：每一幀送出的位移很小，不會攢成一大格")
     func slowScrollIsPixelPrecise() {
         var script = ContactScript()
         script.down(0.95, 0.3)
-        script.move(dx: 0, dy: 0.002, frames: 60)   // 每幀 1.6 px
+        script.move(dx: 0, dy: 0.002, frames: 60)   // 每幀約 1 px
         script.lift()
         let result = script.run { $0.scrollMultiplier = 1 }
 
-        // 啟動那一刻會補送判斷期間緩衝的位移，之後每幀只有 1–2 px。
+        // 啟動那一刻會補送判斷期間緩衝的位移，之後每幀只有 0–2 px。
         let steady = result.scrolls.dropFirst(3).map { abs($0.deltaY) }
-        #expect(steady.count > 40)
+        #expect(steady.count > 30)
         #expect(steady.allSatisfy { (1...2).contains($0) })
+    }
+
+    @Test("放開時手指還在動就有慣性，起始速度照原生的曲線；放開得慢就沒有")
+    func inertiaFollowsNativeCurve() throws {
+        func inertiaStart(perFrame: Double) -> Double? {
+            var script = ContactScript()
+            script.down(0.95, 0.2)
+            script.move(dx: 0, dy: perFrame, frames: 40)
+            script.lift()
+            let line = script.run { $0.scrollMultiplier = 1 }.lines(prefix: "inertia-start").first
+            return line.flatMap { Double($0.split(separator: " ")[2]) }
+        }
+
+        // 0.75/秒：0.75 × (650 + 375) = 769 px/s（實測 0.7–0.9 的中位數 780）。往上滑 → 負值。
+        let moderate = try #require(inertiaStart(perFrame: 0.006))
+        #expect((-800 ... -740).contains(moderate))
+        // 以前要 1.0/秒以上才有慣性。
+        let gentle = try #require(inertiaStart(perFrame: 0.0035))     // 0.44/秒
+        #expect((-420 ... -340).contains(gentle))
+        // 0.25/秒：低於原生的門檻。
+        #expect(inertiaStart(perFrame: 0.002) == nil)
+    }
+
+    @Test("水平方向用同樣的實體尺度：同樣的手指距離與速度，像素與慣性都是垂直的 1.6 倍左右")
+    func horizontalUsesPhysicalUnits() throws {
+        var script = ContactScript()
+        script.down(0.3, 0.05)
+        script.move(dx: 0.004, dy: 0, frames: 60)    // 0.5 觸控板寬／秒 = 0.8 高／秒
+        script.lift()
+        let result = script.run { $0.scrollMultiplier = 1 }
+
+        #expect(result.outcomes == ["scroll:bottomEdge"])
+        let line = try #require(result.lines(prefix: "inertia-start").first)
+        let velocityX = try #require(Double(line.split(separator: " ")[1]))
+        // 0.8 × (650 + 400) = 840 px/s，往右滑 → 正值。
+        #expect((800 ... 880).contains(velocityX))
+    }
+
+    @Test("靈敏度同時放大接觸中的捲動與慣性")
+    func sensitivityScalesInertia() throws {
+        var script = ContactScript()
+        script.down(0.95, 0.2)
+        script.move(dx: 0, dy: 0.006, frames: 40)
+        script.lift()
+        func start(_ multiplier: Double) throws -> Double {
+            let line = try #require(script.run { $0.scrollMultiplier = multiplier }
+                .lines(prefix: "inertia-start").first)
+            return try #require(Double(line.split(separator: " ")[2]))
+        }
+        let one = try start(1)
+        let two = try start(2)
+        #expect(abs(two / one - 2) < 0.01)
     }
 
     @Test("在邊緣區輕點：不捲動，也不留下凍住的游標")
@@ -242,6 +312,158 @@ struct EngineBehaviorTests {
 
         #expect(result.count(prefix: "corner-action") == 0)
         #expect(result.lines(prefix: "click-finish").first?.contains(" 1 ") == true)
+    }
+
+    /// `click-finish <token> <補送旗標> <uptime>` 的最後一欄。
+    private func clickFinishUptime(_ result: Transcript) -> Double? {
+        result.lines(prefix: "click-finish").first
+            .flatMap { $0.split(separator: " ").last }
+            .flatMap { Double($0) }
+    }
+
+    @Test("從中鍵區起手滑出去：位移超過壓力動作的上限、等過晚到樣本的寬限就結束攔截，不用等抬指")
+    func captureEndsAsSoonAsMovementRulesOutForce() throws {
+        var script = ContactScript()
+        script.down(0.5, 0.95)
+        script.move(dx: 0, dy: -0.01, frames: 5)
+        let crossedAt = script.uptime
+        script.move(dx: 0, dy: -0.01, frames: 60)
+        let liftedAt = script.uptime
+        script.lift()
+        let result = script.run()
+
+        let finishes = result.lines(prefix: "click-finish")
+        #expect(finishes.count == 1)
+        #expect(finishes.first?.contains(" 1 ") == true)
+        let finishedAt = try #require(clickFinishUptime(result))
+        // 壓力樣本可能晚到約 150 ms，所以不是一超過就放。
+        #expect(finishedAt >= crossedAt + 0.16)
+        #expect(finishedAt <= crossedAt + 0.2)
+        #expect(finishedAt < liftedAt - 0.25)
+    }
+
+    @Test("停在角落超過一秒都沒用力：壓力動作的時限一過就結束攔截")
+    func captureEndsWhenForceWindowExpires() throws {
+        var script = ContactScript()
+        script.down(0.97, 0.03)
+        let startedAt = script.uptime
+        script.hold(frames: 300)
+        let liftedAt = script.uptime
+        script.lift()
+        let result = script.run(configure: cornerSettings)
+
+        #expect(result.count(prefix: "corner-action") == 0)
+        #expect(result.lines(prefix: "click-finish").first?.contains(" 1 ") == true)
+        let finishedAt = try #require(clickFinishUptime(result))
+        // 角落的時限到期時引擎直接取消這次接觸的壓力資格，晚到的樣本也不會
+        // 再觸發，所以不用另外等寬限。
+        #expect(finishedAt >= startedAt + 1.0)
+        #expect(finishedAt < startedAt + 1.2)
+        #expect(finishedAt < liftedAt - 1.0)
+    }
+
+    @Test("角落起手滑成捲動：不是壓力動作，攔下來的原生左鍵照樣放行")
+    func scrollFromCornerDoesNotDropNativeClick() {
+        var script = ContactScript()
+        script.down(0.97, 0.03)
+        script.move(dx: 0, dy: 0.006, frames: 25)
+        script.lift()
+        let result = script.run(configure: cornerSettings)
+
+        #expect(result.outcomes == ["scroll:rightEdge"])
+        #expect(result.lines(prefix: "click-finish") .count == 1)
+        #expect(result.lines(prefix: "click-finish").first?.contains(" 1 ") == true)
+    }
+
+    @Test("角落按著時第二根手指碰到：沒觸發壓力動作，原生左鍵照樣放行")
+    func multiFingerCancelDoesNotDropNativeClick() {
+        var script = ContactScript()
+        script.down(0.97, 0.03)
+        script.hold(frames: 4)
+        script.multiFinger(frames: 3)
+        script.lift()
+        let result = script.run(configure: cornerSettings)
+
+        #expect(result.count(prefix: "corner-action") == 0)
+        #expect(result.lines(prefix: "click-finish").first?.contains(" 1 ") == true)
+    }
+
+    @Test("用力按觸發之後才抬指：攔截撐到抬指，同一下的左鍵丟掉")
+    func captureStaysUntilLiftAfterForceAction() throws {
+        var script = ContactScript()
+        script.down(0.5, 0.95)
+        script.hold(frames: 4)
+        script.force(120)
+        script.hold(frames: 40)
+        let liftedAt = script.uptime
+        script.lift()
+        let result = script.run()
+
+        #expect(result.outcomes == ["middle-click"])
+        #expect(result.lines(prefix: "click-finish").first?.contains(" 0 ") == true)
+        let finishedAt = try #require(clickFinishUptime(result))
+        #expect(finishedAt >= liftedAt)
+    }
+
+    @Test("滑過位移上限後才送達、時間卻比較早的壓力樣本：仍然觸發，左鍵沒有被提早放行")
+    func lateForceSampleStillDropsNativeClick() {
+        var script = ContactScript()
+        script.down(0.5, 0.95)
+        script.move(dx: 0, dy: -0.008, frames: 5)
+        // 這時位移 0.04，還在上限內。之後再滑兩幀才收到這個樣本。
+        let pressedAt = script.clock
+        script.move(dx: 0, dy: -0.008, frames: 2)
+        script.force(120, at: pressedAt)
+        script.hold(frames: 3)
+        script.lift()
+        let result = script.run()
+
+        #expect(result.outcomes == ["middle-click"])
+        let finishes = result.lines(prefix: "click-finish")
+        #expect(finishes.count == 1)
+        #expect(finishes.first?.contains(" 0 ") == true)
+    }
+
+    @Test("停在中鍵區超過一秒都沒用力：時限加上晚到樣本的寬限過後結束攔截")
+    func middleZoneCaptureEndsAfterForceWindowAndGrace() throws {
+        var script = ContactScript()
+        script.down(0.5, 0.95)
+        let startedAt = script.uptime
+        script.hold(frames: 300)
+        let liftedAt = script.uptime
+        script.lift()
+        let result = script.run()
+
+        #expect(result.count(prefix: "middle-click") == 0)
+        #expect(result.lines(prefix: "click-finish").first?.contains(" 1 ") == true)
+        let finishedAt = try #require(clickFinishUptime(result))
+        #expect(finishedAt >= startedAt + 1.16)
+        #expect(finishedAt < startedAt + 1.2)
+        #expect(finishedAt < liftedAt - 1.0)
+    }
+
+    @Test("壓力動作觸發後滑到別處：攔截提早結束，之後的按壓是另一下、不再吃掉")
+    func captureEndsWhenFingerLeavesAfterForceAction() throws {
+        var script = ContactScript()
+        script.down(0.5, 0.95)
+        script.hold(frames: 4)
+        script.force(120)
+        script.hold(frames: 4)
+        script.move(dx: 0, dy: -0.01, frames: 8)
+        let movedAwayAt = script.uptime
+        script.move(dx: 0, dy: -0.01, frames: 40)
+        let liftedAt = script.uptime
+        script.lift()
+        let result = script.run()
+
+        #expect(result.outcomes == ["middle-click"])
+        let finishes = result.lines(prefix: "click-finish")
+        #expect(finishes.count == 1)
+        // 同一下的左鍵仍然丟掉。
+        #expect(finishes.first?.contains(" 0 ") == true)
+        let finishedAt = try #require(clickFinishUptime(result))
+        #expect(finishedAt <= movedAwayAt)
+        #expect(finishedAt < liftedAt - 0.25)
     }
 
     @Test("壓力不到門檻：不觸發")

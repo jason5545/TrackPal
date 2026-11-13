@@ -10,11 +10,21 @@ private final class DeviceCallbackBox: Sendable {
     let context: DeviceCallbackContext
     let engine: ZoneScrollEngine
     let logger: FileLogger
+    let nativeScrollRecorder: NativeScrollRecorder
+    let pressEvidence: PressEvidence
 
-    init(context: DeviceCallbackContext, engine: ZoneScrollEngine, logger: FileLogger) {
+    init(
+        context: DeviceCallbackContext,
+        engine: ZoneScrollEngine,
+        logger: FileLogger,
+        nativeScrollRecorder: NativeScrollRecorder,
+        pressEvidence: PressEvidence
+    ) {
         self.context = context
         self.engine = engine
         self.logger = logger
+        self.nativeScrollRecorder = nativeScrollRecorder
+        self.pressEvidence = pressEvidence
     }
 }
 
@@ -26,6 +36,8 @@ private final class DeviceCallbackBox: Sendable {
 final class MultitouchDeviceManager {
     private let engine: ZoneScrollEngine
     private let logger: FileLogger
+    private let nativeScrollRecorder: NativeScrollRecorder
+    private let pressEvidence: PressEvidence
 
     private var devices: [MTDeviceRef] = []
     /// Keeps the enumerated device objects alive while their raw refs are in use.
@@ -37,9 +49,16 @@ final class MultitouchDeviceManager {
     private var retiredBoxes: [DeviceCallbackBox] = []
     private var nextDeviceID = 0
 
-    init(engine: ZoneScrollEngine, logger: FileLogger) {
+    init(
+        engine: ZoneScrollEngine,
+        logger: FileLogger,
+        nativeScrollRecorder: NativeScrollRecorder,
+        pressEvidence: PressEvidence
+    ) {
         self.engine = engine
         self.logger = logger
+        self.nativeScrollRecorder = nativeScrollRecorder
+        self.pressEvidence = pressEvidence
     }
 
     /// 列舉並啟動所有 multitouch 裝置。回傳這一輪的裝置 callback ID；
@@ -71,7 +90,9 @@ final class MultitouchDeviceManager {
             let box = DeviceCallbackBox(
                 context: DeviceCallbackContext(deviceID: nextDeviceID),
                 engine: engine,
-                logger: logger
+                logger: logger,
+                nativeScrollRecorder: nativeScrollRecorder,
+                pressEvidence: pressEvidence
             )
             boxes.append(box)
             let refcon = Unmanaged.passUnretained(box).toOpaque()
@@ -150,6 +171,24 @@ private func touchCallback(
         )
     }
 
+    // 校正用：多指接觸的幀交給原生捲動的記錄器（預設關閉）。
+    if box.nativeScrollRecorder.isEnabled {
+        if numTouches == 0 {
+            box.nativeScrollRecorder.recordLift(
+                uptime: callbackUptime, timestamp: timestamp
+            )
+        } else if let touches {
+            let count = min(Int(numTouches), 5)
+            box.nativeScrollRecorder.recordFrame(
+                uptime: callbackUptime,
+                timestamp: timestamp,
+                points: (0..<count).map {
+                    (touches[$0].normalized.position.x, touches[$0].normalized.position.y)
+                }
+            )
+        }
+    }
+
     guard let routed = box.context.routeContactFrame(
         touchCount: Int(numTouches),
         touch: sample,
@@ -175,6 +214,8 @@ private func forceCentroidCallback(
 
     let forceCentroid = centroid.pointee
     let sampleUptime = CACurrentMediaTime()
+    // 不經過排序器：event tap 判斷原生左鍵時要的是最新的按壓狀態。
+    box.pressEvidence.note(force: forceCentroid.force, uptime: sampleUptime)
     if box.context.claimForceValueDiagnostic() {
         box.logger.log(String(
             format: "[DIAG] Device %d force centroid - force=%.1f, rawTimestamp=%.3f, touchSeconds=%.6f",

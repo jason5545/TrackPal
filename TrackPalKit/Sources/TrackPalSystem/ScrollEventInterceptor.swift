@@ -9,11 +9,23 @@ import TrackPalCore
 /// tap 掛在 main run loop 上。判斷邏輯在 `shouldSuppress(type:event:)`，不依賴
 /// tap 本身，所以可以用沒送出去的 CGEvent 直接測。
 public final class ScrollEventInterceptor: @unchecked Sendable {
-    public typealias ClickReplayer = @Sendable (PrimaryClickSnapshot, CGPoint) -> Void
+    /// 補送被攔下的原生左鍵時要送哪一部分。
+    public enum ClickReplayPart: Sendable, Equatable {
+        /// 完整的一組 down／up。
+        case pair
+        /// 只有 down：實體按鍵還按著（按住拖曳）。
+        case down
+        /// 只有 up：對應先前單獨補送的 down。
+        case up
+    }
+
+    public typealias ClickReplayer = @Sendable (ClickReplayPart, PrimaryClickSnapshot, CGPoint) -> Void
 
     private let suppression: ScrollSuppressionState
     private let log: @Sendable (String) -> Void
     private let replayClick: ClickReplayer
+    private let foreignScrollObserver: (@Sendable (CGEvent) -> Void)?
+    private let pressEvidence: PressEvidence?
 
     private struct State {
         var eventTap: CFMachPort?
@@ -27,21 +39,64 @@ public final class ScrollEventInterceptor: @unchecked Sendable {
     public init(
         suppression: ScrollSuppressionState,
         log: @escaping @Sendable (String) -> Void,
-        replayClick: @escaping ClickReplayer = { snapshot, location in
-            SyntheticEvents.postMousePair(
-                downType: .leftMouseDown,
-                upType: .leftMouseUp,
-                at: location,
-                button: .left,
-                flags: CGEventFlags(rawValue: snapshot.flags),
-                clickState: snapshot.clickState
-            )
+        foreignScrollObserver: (@Sendable (CGEvent) -> Void)? = nil,
+        pressEvidence: PressEvidence? = nil,
+        replayClick: @escaping ClickReplayer = { part, snapshot, location in
+            let flags = CGEventFlags(rawValue: snapshot.flags)
+            switch part {
+            case .pair:
+                SyntheticEvents.postMousePair(
+                    downType: .leftMouseDown,
+                    upType: .leftMouseUp,
+                    at: location,
+                    button: .left,
+                    flags: flags,
+                    clickState: snapshot.clickState
+                )
+            case .down:
+                SyntheticEvents.postMouseEvent(
+                    type: .leftMouseDown,
+                    at: location,
+                    button: .left,
+                    flags: flags,
+                    clickState: snapshot.clickState
+                )
+            case .up:
+                SyntheticEvents.postMouseEvent(
+                    type: .leftMouseUp,
+                    at: location,
+                    button: .left,
+                    flags: flags,
+                    clickState: snapshot.clickState
+                )
+            }
         }
     ) {
         self.suppression = suppression
         self.log = log
+        self.foreignScrollObserver = foreignScrollObserver
+        self.pressEvidence = pressEvidence
         self.replayClick = replayClick
     }
+
+    /// `CGEvent.timestamp` 換成單調時鐘的奈秒。
+    ///
+    /// 這個欄位跟 `mach_absolute_time` 同單位，不是奈秒：Apple Silicon 上一格
+    /// 是 125/3 奈秒。2026-11-13 以前這裡把它直接當奈秒，跟由 uptime 換算
+    /// 的接觸時間一比永遠偏早，原生左鍵的攔截因此從來沒有生效過。
+    public static func monotonicNanoseconds(fromEventTimestamp ticks: UInt64) -> UInt64 {
+        PrimaryClickCaptureCoordinator.nanoseconds(
+            fromMachTicks: ticks,
+            numer: machTimebase.numer,
+            denom: machTimebase.denom
+        )
+    }
+
+    private static let machTimebase: mach_timebase_info_data_t = {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        return info
+    }()
 
     public var isRunning: Bool {
         state.withLockUnchecked { $0.isRunning }
@@ -179,8 +234,13 @@ public final class ScrollEventInterceptor: @unchecked Sendable {
         case .scrollWheel:
             // Suppress other scroll events while we're actively scrolling, but
             // never TrackPal's own.
+            let isOwn = SyntheticEvents.isOwnEvent(event)
+            if !isOwn {
+                // 校正用的觀察者：只看，不影響要不要擋。
+                foreignScrollObserver?(event)
+            }
             guard suppression.isActivelyScrolling else { return false }
-            return !SyntheticEvents.isOwnEvent(event)
+            return !isOwn
 
         default:
             return false
@@ -193,9 +253,18 @@ public final class ScrollEventInterceptor: @unchecked Sendable {
         guard !SyntheticEvents.isOwnEvent(event) else { return false }
 
         let receivedAt = DispatchTime.now().uptimeNanoseconds
-        let eventTimestamp = event.timestamp > 0 ? event.timestamp : receivedAt
+        let eventTimestamp = event.timestamp > 0
+            ? Self.monotonicNanoseconds(fromEventTimestamp: event.timestamp)
+            : receivedAt
         let mouseEvent: PrimaryClickCaptureCoordinator.MouseEvent =
             type == .leftMouseDown ? .leftMouseDown : .leftMouseUp
+
+        // 沒有按壓力道的 down 是輕點點按，不可能跟壓力動作是同一下：完全不碰。
+        if mouseEvent == .leftMouseDown,
+           let pressEvidence,
+           !pressEvidence.hasPress(near: eventTimestamp) {
+            return false
+        }
 
         let result = state.withLockUnchecked {
             $0.clicks.capture(
@@ -212,7 +281,19 @@ public final class ScrollEventInterceptor: @unchecked Sendable {
         }
         perform(result.replay)
 
-        if result.shouldSuppress {
+        if result.repostUp {
+            // 對應的 down 是我們補送的；up 也走同一條路，順序才不會顛倒。
+            replayClick(
+                .up,
+                PrimaryClickSnapshot(
+                    location: event.location,
+                    flags: event.flags.rawValue,
+                    clickState: event.getIntegerValueField(.mouseEventClickState)
+                ),
+                event.location
+            )
+            log("Native left up reposted after released down")
+        } else if result.shouldSuppress {
             log("Native left click suppressed during force action guard")
         }
         return result.shouldSuppress
@@ -220,23 +301,35 @@ public final class ScrollEventInterceptor: @unchecked Sendable {
 
     private func perform(_ replay: PrimaryClickReplay?) {
         guard let replay else { return }
-        guard replay.snapshots.count == replay.expectedPairCount else {
+
+        if replay.snapshots.count == replay.expectedPairCount {
+            for snapshot in replay.snapshots {
+                guard let location = snapshot.location else {
+                    log("Primary click replay missing location for gesture \(replay.token)")
+                    continue
+                }
+                replayClick(.pair, snapshot, location)
+            }
+            if replay.expectedPairCount > 0 || replay.releasedDown == nil {
+                log(
+                    "Native left click replayed for gesture \(replay.token), pairs=\(replay.expectedPairCount)"
+                )
+            }
+        } else {
             log(
                 "Primary click replay snapshot mismatch for gesture \(replay.token): pairs=\(replay.expectedPairCount) snapshots=\(replay.snapshots.count)"
             )
-            return
         }
 
-        for snapshot in replay.snapshots {
-            guard let location = snapshot.location else {
+        // 還按著的 down 不管前面補送得如何都要放出去，否則之後的 up 會落單。
+        if let down = replay.releasedDown {
+            if let location = down.location {
+                replayClick(.down, down, location)
+                log("Native left down released for gesture \(replay.token)")
+            } else {
                 log("Primary click replay missing location for gesture \(replay.token)")
-                continue
             }
-            replayClick(snapshot, location)
         }
-        log(
-            "Native left click replayed for gesture \(replay.token), pairs=\(replay.expectedPairCount)"
-        )
     }
 }
 

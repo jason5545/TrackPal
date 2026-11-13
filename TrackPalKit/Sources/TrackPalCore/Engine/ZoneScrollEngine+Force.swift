@@ -563,7 +563,7 @@ extension ZoneScrollEngine {
 
         if contact.currentZone == .middleClick && configuration.middleClickEnabled {
             contact.forceActionTriggered = true
-            contact.shouldReplayPendingPrimaryClick = false
+            contact.forceActionPosition = contact.lastTouchPosition
             contact.gestureOutcome = .middleClick
             effects.log(String(format: "Middle click press accepted: source=%@ maxForce=%.1f movementAtForce=%.4f",
                                          contact.forcePressSource, contact.forcePressMaxForce, movementBeforeForce))
@@ -593,7 +593,7 @@ extension ZoneScrollEngine {
         guard action != .none else { return }
 
         contact.forceActionTriggered = true
-        contact.shouldReplayPendingPrimaryClick = false
+        contact.forceActionPosition = contact.lastTouchPosition
         contact.gestureOutcome = .cornerAction(action)
         effects.log(String(format: "Corner action accepted: zone=%@ source=%@ maxForce=%.1f",
                                      String(describing: contact.currentZone), contact.forcePressSource, contact.forcePressMaxForce))
@@ -610,6 +610,78 @@ extension ZoneScrollEngine {
         }
 
         return false
+    }
+
+    /// 這次接觸還有沒有可能觸發壓力動作。寧可多答「有」：答錯成「有」只是
+    /// 讓攔下來的左鍵晚一點放行，答錯成「沒有」則是壓力動作連帶多點一下。
+    func forceActionRemainsPossible(at timestamp: Double) -> Bool {
+        if contact.forceGestureDisqualified { return false }
+        // 已經排隊、還沒裁決的樣本可能在下一幀觸發。
+        if !contact.pendingForceEvaluations.isEmpty { return true }
+        if timestamp - contact.touchStartTime >= forcePressMaxDuration {
+            return false
+        }
+        // 中鍵的位移上限，也是角落含寬限在內的最大值。
+        if contact.maxTouchDisplacement
+            >= max(tapMaxMovement, CornerForceCrossingGrace.defaultMaximumExcursionAtForce) {
+            return false
+        }
+        if contact.currentZone == .middleClick {
+            return configuration.middleClickEnabled
+        }
+        return isActiveForceCandidateCorner(contact.currentZone)
+    }
+
+    /// 原生左鍵的攔截只需要撐到「壓力動作還有可能」為止。位移、時間或區域
+    /// 已經排除壓力動作之後就提早結束，攔下來的左鍵立刻放行：從中鍵區或角落
+    /// 起手的一般點擊與按住拖曳不用等到抬指。
+    func releasePrimaryClickCaptureIfForceActionImpossible(
+        timestamp: Double,
+        gestureUptime: Double
+    ) {
+        guard contact.isTracking,
+              contact.pendingForceClickSessionID != nil else {
+            return
+        }
+
+        if contact.forceActionTriggered {
+            // 壓力動作已經觸發：同一下的原生左鍵要丟掉，所以攔截繼續。但手指
+            // 滑到別處之後再按就是另一下了（例如右鍵選單出來後滑去選項目），
+            // 不能一路吃到抬指。
+            guard let origin = contact.forceActionPosition,
+                  physicalTouchDistance(
+                      from: origin, to: contact.lastTouchPosition
+                  ) >= tapMaxMovement else {
+                return
+            }
+            resolvePendingPrimaryClick(
+                replayCapturedClick: false,
+                gestureUptime: gestureUptime
+            )
+            return
+        }
+
+        guard !forceActionRemainsPossible(at: timestamp) else {
+            contact.forceActionRuledOutSince = nil
+            return
+        }
+
+        if !contact.forceGestureDisqualified {
+            // 壓力樣本走另一條事件流，最多會比觸控幀晚約 150 ms 才到；晚到
+            // 的樣本是用它自己那個時間點的位移來判斷，仍然可能觸發。等過這段
+            // 寬限，確定不會再有更早的樣本進來才放行。
+            let ruledOutSince = contact.forceActionRuledOutSince ?? timestamp
+            contact.forceActionRuledOutSince = ruledOutSince
+            guard timestamp - ruledOutSince
+                >= CornerForceCrossingGrace.defaultDecisionHoldWindow else {
+                return
+            }
+        }
+
+        resolvePendingPrimaryClick(
+            replayCapturedClick: true,
+            gestureUptime: gestureUptime
+        )
     }
 
     func resolvePendingPrimaryClick(

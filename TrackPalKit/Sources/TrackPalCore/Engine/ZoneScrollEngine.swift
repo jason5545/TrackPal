@@ -81,15 +81,6 @@ public final class ZoneScrollEngine {
 
     // MARK: - Tuning constants
 
-    /// 靈敏度 1.0 時，手指滑過整個觸控板高度（normalized 1.0）捲動的像素數。
-    ///
-    /// 2026-11-13 以前這個值是 100，但送出去的事件被系統量化成 8 px 一格
-    /// （每筆事件不論 1–19 px 一律變成 8）。實機軌跡裡 93–96% 的事件原始值
-    /// 是 1 px，等於實際上是 800 px、而且只能 8 px 一跳。改成真正逐像素時把
-    /// 這個倍率寫進來，同樣的靈敏度設定捲動量不變（用 3,758 筆實機軌跡重算，
-    /// 每次接觸新舊比值的中位數是 1.00），只是變成 1 px 一格。
-    static let pixelsPerUnitTravel: CGFloat = 800
-
     let velocityHistorySize = 5
     let minimumActivationSampleDistance: CGFloat = 0.0005
     let minimumEvidenceActivityDistance: CGFloat = 0.00005
@@ -214,6 +205,11 @@ public final class ZoneScrollEngine {
         var rawForcePeak: Float = 0
         var forcePressSource = "none"
         var forceActionTriggered = false
+        /// 壓力動作觸發當下手指的位置；用來判斷後續的按壓是不是另一下。
+        var forceActionPosition: CGPoint?
+        /// 位移、時間或區域第一次排除壓力動作的硬體時間。壓力樣本可能晚到，
+        /// 所以要再等一段寬限才真的結束原生左鍵的攔截。
+        var forceActionRuledOutSince: Double?
         var forcePressThresholdRejected = false
         var forceGestureDisqualified = false
         var cornerForceWindowExpired = false
@@ -231,7 +227,6 @@ public final class ZoneScrollEngine {
         // Per-contact identity is also used to scope native click suppression.
         var activeTouchSessionID: UInt64?
         var pendingForceClickSessionID: UInt64?
-        var shouldReplayPendingPrimaryClick = false
 
         // Terminal telemetry. One concise record per physical contact is much
         // more useful than several unrelated threshold messages.

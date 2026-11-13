@@ -56,23 +56,20 @@ final class PrimaryClickSuppressionGateTests: XCTestCase {
         XCTAssertEqual(gate.capture(event: .leftMouseDown, at: 1_040), .pass)
     }
 
-    func testNormalClickKeepsPartialUntilMatchingUpThenRequestsReplay() {
+    func testNormalFinishReleasesHeldDownAndRepostsItsUp() {
         var gate = PrimaryClickSuppressionGate()
         gate.begin(token: 9, at: 1_000)
         XCTAssertEqual(gate.capture(event: .leftMouseDown, at: 1_010), .suppress(token: 9))
 
+        // 按鍵還按著就定案（例如按住拖曳）：down 立刻放行，不等 up。
         XCTAssertEqual(
             gate.finish(token: 9, replayCapturedClick: true, at: 1_020),
-            .none
+            .replayClicksAndReleaseDown(token: 9, pairs: [], downAt: 1_010)
         )
+        XCTAssertFalse(gate.contains(token: 9))
         XCTAssertEqual(
             gate.capture(event: .leftMouseUp, at: 1_030),
-            .suppressAndResolve(
-                .replayClicks(
-                    token: 9,
-                    pairs: [.init(downAt: 1_010, upAt: 1_030)]
-                )
-            )
+            .suppressAndRepostUp(token: 9)
         )
         XCTAssertEqual(gate.capture(event: .leftMouseUp, at: 1_040), .pass)
     }
@@ -89,48 +86,58 @@ final class PrimaryClickSuppressionGateTests: XCTestCase {
         XCTAssertEqual(gate.capture(event: .leftMouseUp, at: 1_020), .pass)
     }
 
-    func testEndingPartialExpiresAndPassesNextEventWithResetSignal() {
+    func testReleasedDownWaitsForItsUpWithoutExpiry() {
         var gate = PrimaryClickSuppressionGate()
         let finishedAt: UInt64 = 1_020
         gate.begin(token: 1, at: 1_000)
         XCTAssertEqual(gate.capture(event: .leftMouseDown, at: 1_010), .suppress(token: 1))
         XCTAssertEqual(
             gate.finish(token: 1, replayCapturedClick: true, at: finishedAt),
-            .none
+            .replayClicksAndReleaseDown(token: 1, pairs: [], downAt: 1_010)
         )
 
-        let afterExpiry = finishedAt
-            + PrimaryClickSuppressionGate.endingPartialExpiryNanoseconds
-            + 1
+        // 拖曳可以持續很久，放開時的 up 仍然要接在補送的 down 後面。
+        let muchLater = finishedAt
+            + PrimaryClickSuppressionGate.endingPartialExpiryNanoseconds * 40
         XCTAssertEqual(
-            gate.capture(event: .leftMouseUp, at: afterExpiry),
-            .passAndReset
+            gate.capture(event: .leftMouseUp, at: muchLater),
+            .suppressAndRepostUp(token: 1)
         )
-        XCTAssertEqual(gate.capture(event: .leftMouseDown, at: afterExpiry + 1), .pass)
-        XCTAssertEqual(gate.capture(event: .leftMouseUp, at: afterExpiry + 2), .pass)
+        XCTAssertEqual(gate.capture(event: .leftMouseDown, at: muchLater + 1), .pass)
+        XCTAssertEqual(gate.capture(event: .leftMouseUp, at: muchLater + 2), .pass)
     }
 
-    func testEndingPartialAcceptsUpAtExpiryBoundary() {
+    func testFinishAlwaysDisarmsWhenCapturedEventsAreStampedAfterGestureEnd() {
         var gate = PrimaryClickSuppressionGate()
-        let finishedAt: UInt64 = 1_020
         gate.begin(token: 1, at: 1_000)
         XCTAssertEqual(gate.capture(event: .leftMouseDown, at: 1_010), .suppress(token: 1))
+        XCTAssertEqual(gate.capture(event: .leftMouseUp, at: 1_020), .suppress(token: 1))
+
+        // 輕點點按在手指離開後才送出，事件時間比接觸的結束時間晚。
         XCTAssertEqual(
-            gate.finish(token: 1, replayCapturedClick: true, at: finishedAt),
+            gate.finish(token: 1, replayCapturedClick: true, at: 1_005),
+            .replayClicks(token: 1, pairs: [.init(downAt: 1_010, upAt: 1_020)])
+        )
+        XCTAssertFalse(gate.contains(token: 1))
+        XCTAssertEqual(gate.capture(event: .leftMouseDown, at: 1_030), .pass)
+        XCTAssertEqual(gate.capture(event: .leftMouseUp, at: 1_040), .pass)
+    }
+
+    func testForceFinishAlsoDisarmsWhenCapturedDownIsStampedAfterGestureEnd() {
+        var gate = PrimaryClickSuppressionGate()
+        gate.begin(token: 1, at: 1_000)
+        XCTAssertEqual(gate.capture(event: .leftMouseDown, at: 1_010), .suppress(token: 1))
+
+        XCTAssertEqual(
+            gate.finish(token: 1, replayCapturedClick: false, at: 1_005, receivedAt: 1_015),
             .none
         )
-
-        let expiry = finishedAt
-            + PrimaryClickSuppressionGate.endingPartialExpiryNanoseconds
+        // 被丟掉的 down，它的 up 也不放出去。
         XCTAssertEqual(
-            gate.capture(event: .leftMouseUp, at: expiry),
-            .suppressAndResolve(
-                .replayClicks(
-                    token: 1,
-                    pairs: [.init(downAt: 1_010, upAt: expiry)]
-                )
-            )
+            gate.capture(event: .leftMouseUp, at: 1_020, receivedAt: 1_020),
+            .suppressAndResolve(.discard(token: 1))
         )
+        XCTAssertEqual(gate.capture(event: .leftMouseDown, at: 1_030, receivedAt: 1_030), .pass)
     }
 
     func testDuplicateDownDoesNotReplaceOriginalCapturedDown() {
@@ -149,16 +156,17 @@ final class PrimaryClickSuppressionGateTests: XCTestCase {
         )
     }
 
-    func testNewDownDuringEndingPassesAndResetsOldPartial() {
+    func testNewDownAfterReleasedDownPassesAndStopsWaitingForUp() {
         var gate = PrimaryClickSuppressionGate()
         gate.begin(token: 1, at: 1_000)
         XCTAssertEqual(gate.capture(event: .leftMouseDown, at: 1_010), .suppress(token: 1))
         XCTAssertEqual(
             gate.finish(token: 1, replayCapturedClick: true, at: 1_020),
-            .none
+            .replayClicksAndReleaseDown(token: 1, pairs: [], downAt: 1_010)
         )
 
-        XCTAssertEqual(gate.capture(event: .leftMouseDown, at: 1_030), .passAndReset)
+        // 沒等到 up 就來了新的 down：狀態對不上，之後全部原樣放行。
+        XCTAssertEqual(gate.capture(event: .leftMouseDown, at: 1_030), .pass)
         XCTAssertEqual(gate.capture(event: .leftMouseUp, at: 1_040), .pass)
     }
 
@@ -195,13 +203,13 @@ final class PrimaryClickSuppressionGateTests: XCTestCase {
         )
     }
 
-    func testNewTokenKeepsEndingStateUntilOldUpArrives() {
+    func testNewTokenDoesNotStealUpOfReleasedDown() {
         var gate = PrimaryClickSuppressionGate()
         gate.begin(token: 1, at: 1_000)
         XCTAssertEqual(gate.capture(event: .leftMouseDown, at: 1_010), .suppress(token: 1))
         XCTAssertEqual(
             gate.finish(token: 1, replayCapturedClick: true, at: 1_020),
-            .none
+            .replayClicksAndReleaseDown(token: 1, pairs: [], downAt: 1_010)
         )
 
         gate.begin(token: 2, at: 1_030)
@@ -211,12 +219,7 @@ final class PrimaryClickSuppressionGateTests: XCTestCase {
                 at: 1_015,
                 receivedAt: 1_040
             ),
-            .suppressAndResolve(
-                .replayClicks(
-                    token: 1,
-                    pairs: [.init(downAt: 1_010, upAt: 1_015)]
-                )
-            )
+            .suppressAndRepostUp(token: 1)
         )
         XCTAssertEqual(gate.capture(event: .leftMouseDown, at: 1_050), .suppress(token: 2))
         XCTAssertEqual(gate.capture(event: .leftMouseUp, at: 1_060), .suppress(token: 2))
@@ -289,7 +292,7 @@ final class PrimaryClickSuppressionGateTests: XCTestCase {
         XCTAssertFalse(gate.contains(token: 7))
     }
 
-    func testNormalFinishReplaysCompletePairsAndKeepsTrailingPartial() {
+    func testNormalFinishReplaysCompletePairsAndReleasesTrailingDown() {
         var gate = PrimaryClickSuppressionGate()
         gate.begin(token: 3, at: 1_000)
 
@@ -299,22 +302,17 @@ final class PrimaryClickSuppressionGateTests: XCTestCase {
 
         XCTAssertEqual(
             gate.finish(token: 3, replayCapturedClick: true, at: 1_040),
-            .replayClicks(
+            .replayClicksAndReleaseDown(
                 token: 3,
-                pairs: [.init(downAt: 1_010, upAt: 1_020)]
-            )
-        )
-        XCTAssertTrue(gate.contains(token: 3))
-        XCTAssertEqual(
-            gate.capture(event: .leftMouseUp, at: 1_050),
-            .suppressAndResolve(
-                .replayClicks(
-                    token: 3,
-                    pairs: [.init(downAt: 1_030, upAt: 1_050)]
-                )
+                pairs: [.init(downAt: 1_010, upAt: 1_020)],
+                downAt: 1_030
             )
         )
         XCTAssertFalse(gate.contains(token: 3))
+        XCTAssertEqual(
+            gate.capture(event: .leftMouseUp, at: 1_050),
+            .suppressAndRepostUp(token: 3)
+        )
     }
 
     func testForceFinishWithoutDownGuardsDelayedCompletePair() {

@@ -17,12 +17,21 @@ struct PrimaryClickSuppressionGate {
         case none
         case discard(token: GestureToken)
         case replayClicks(token: GestureToken, pairs: [ClickPair])
+        /// 補送完整的幾組之後，再把還沒等到 up 的那個 down 單獨送出去。
+        /// 實體按鍵還按著，對應的 up 之後由 `suppressAndRepostUp` 接手。
+        case replayClicksAndReleaseDown(
+            token: GestureToken,
+            pairs: [ClickPair],
+            downAt: UInt64
+        )
 
         var token: GestureToken? {
             switch self {
             case .none:
                 nil
-            case let .discard(token), let .replayClicks(token, _):
+            case let .discard(token),
+                 let .replayClicks(token, _),
+                 let .replayClicksAndReleaseDown(token, _, _):
                 token
             }
         }
@@ -33,6 +42,9 @@ struct PrimaryClickSuppressionGate {
         case passAndReset
         case suppress(token: GestureToken)
         case suppressAndResolve(Resolution)
+        /// 這個 up 屬於先前單獨放行的 down。吃掉原生事件、改由呼叫端補送，
+        /// 補送的 down 與 up 走同一條路，順序才不會顛倒。
+        case suppressAndRepostUp(token: GestureToken)
     }
 
     private struct ActiveGesture {
@@ -60,6 +72,8 @@ struct PrimaryClickSuppressionGate {
     // active token instead of replacing it and losing suppressed input.
     private var activeGesture: ActiveGesture?
     private var endingGestures: [EndingGesture] = []
+    /// 已經單獨放行 down、還在等原生 up 的那次接觸。
+    private var releasedDownToken: GestureToken?
 
     /// `time` is the raw gesture's physical uptime timestamp. `receivedAt`
     /// is when the callback is handled and is used only to expire old guards.
@@ -87,6 +101,14 @@ struct PrimaryClickSuppressionGate {
         let purgedExpiredEnding = purgeExpiredEndings(
             at: receivedAt ?? time
         )
+
+        if let token = releasedDownToken {
+            releasedDownToken = nil
+            if event == .leftMouseUp {
+                return .suppressAndRepostUp(token: token)
+            }
+            // 還沒等到 up 就來了新的 down：狀態對不上，照一般流程處理。
+        }
 
         // Event timestamps and raw-touch gesture boundaries share the system
         // uptime clock. A click that physically occurred after the new contact
@@ -164,23 +186,40 @@ struct PrimaryClickSuppressionGate {
     ) -> Resolution {
         let deliveryTime = receivedAt ?? time
         _ = purgeExpiredEndings(at: deliveryTime)
-        guard let gesture = activeGesture,
-              gesture.token == token,
-              time >= gesture.beganAt,
-              gesture.completedPairs.allSatisfy({ time >= $0.upAt }),
-              gesture.pendingDownAt.map({ time >= $0 }) ?? true else {
+        guard let gesture = activeGesture, gesture.token == token else {
             return .none
+        }
+
+        // 被這次接觸攔下的事件，時間可能比接觸的結束時間晚（輕點點按是手指
+        // 離開之後才由系統送出）。這裡一律收尾：時間對不上就把結束時間往後
+        // 推，不讓攔截留到下一次接觸、把之後的點擊吃掉。
+        var time = max(time, gesture.beganAt)
+        if let lastUpAt = gesture.completedPairs.last?.upAt {
+            time = max(time, lastUpAt)
+        }
+        if let downAt = gesture.pendingDownAt {
+            time = max(time, downAt)
         }
 
         activeGesture = nil
 
         if let downAt = gesture.pendingDownAt {
+            if replayCapturedClick {
+                // 實體按鍵還按著（例如按住拖曳）：現在就把 down 放出去，
+                // 不等 up。
+                releasedDownToken = token
+                return .replayClicksAndReleaseDown(
+                    token: token,
+                    pairs: gesture.completedPairs,
+                    downAt: downAt
+                )
+            }
             endingGestures.append(EndingGesture(
                 token: token,
                 beganAt: gesture.beganAt,
                 endedAt: time,
                 pendingDownAt: downAt,
-                replayCapturedClick: replayCapturedClick,
+                replayCapturedClick: false,
                 acceptsDelayedDown: false,
                 expiresAt: expiryDeadline(from: deliveryTime)
             ))
@@ -203,9 +242,7 @@ struct PrimaryClickSuppressionGate {
             guard !gesture.completedPairs.isEmpty else {
                 // Normal finish with no native down is not ambiguous: disarm
                 // immediately instead of swallowing the user's next click.
-                return gesture.pendingDownAt == nil
-                    ? .discard(token: token)
-                    : .none
+                return .discard(token: token)
             }
             return .replayClicks(
                 token: token,
@@ -228,6 +265,7 @@ struct PrimaryClickSuppressionGate {
     mutating func reset() {
         activeGesture = nil
         endingGestures.removeAll()
+        releasedDownToken = nil
     }
 
     func contains(token: GestureToken) -> Bool {

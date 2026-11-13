@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 import Testing
 @testable import TrackPalCore
 
@@ -201,122 +202,182 @@ struct LineDeltaAccumulatorTests {
     }
 }
 
+@Suite("原生手感的曲線")
+struct NativeScrollCurveTests {
+    @Test("接觸增益落在實測的範圍，而且隨速度緩慢增加", arguments: [
+        (0.42, 550.0), (0.62, 597.0), (0.87, 616.0), (1.25, 649.0),
+    ])
+    func contactGainMatchesMeasurements(speed: Double, measured: Double) {
+        let gain = Double(NativeScrollCurve.contactGain(atSpeed: CGFloat(speed)))
+        // 跟各速度區間實測的中位數差不到 5%。
+        #expect(abs(gain - measured) / measured < 0.05)
+    }
+
+    @Test("增益只看速度大小；極端值夾在範圍內，不會爆掉")
+    func contactGainIsBounded() {
+        #expect(NativeScrollCurve.contactGain(atSpeed: -0.8) == NativeScrollCurve.contactGain(atSpeed: 0.8))
+        #expect(NativeScrollCurve.contactGain(atSpeed: 0) == 500)
+        #expect(NativeScrollCurve.contactGain(atSpeed: 100) == NativeScrollCurve.contactGain(atSpeed: 4))
+        #expect(NativeScrollCurve.contactGain(atSpeed: .nan).isFinite)
+        #expect(NativeScrollCurve.contactGain(atSpeed: 4) < 1_000)
+        // 速度增加一倍，增益只多一成左右：原生的加速很溫和。
+        #expect(NativeScrollCurve.contactGain(atSpeed: 1.0) / NativeScrollCurve.contactGain(atSpeed: 0.5) < 1.15)
+    }
+
+    @Test("放開得太慢沒有慣性；門檻以上的起始速度符合實測", arguments: [
+        (0.2, 0.0, 0.0), (0.34, 0.0, 0.0),
+        (0.45, 360.0, 480.0),      // 實測 0.40–0.50：360–600 px/s
+        (0.85, 720.0, 960.0),      // 實測 0.81–0.88：720–960
+        (1.05, 1_000.0, 1_700.0),  // 實測 960–2280（只有 3 筆）
+        (9.0, 20_000.0, 23_000.0), // 極端值夾在 6.0
+    ])
+    func momentumSpeed(liftSpeed: Double, low: Double, high: Double) {
+        let speed = Double(NativeScrollCurve.momentumSpeed(atLiftSpeed: CGFloat(liftSpeed)))
+        #expect(speed >= low && speed <= high)
+        #expect(Double(NativeScrollCurve.momentumSpeed(atLiftSpeed: CGFloat(-liftSpeed))) == speed)
+    }
+
+    @Test("照模型滑完的總距離接近原生（原生：峰值速度的 0.24 秒左右）", arguments: [
+        (840.0, 184.0, 209.0), (1680.0, 396.0, 440.0), (2280.0, 544.0, 600.0),
+    ])
+    func momentumDistanceMatchesNative(peak: Double, low: Double, high: Double) {
+        var model = InertiaModel()
+        model.start(velocityX: 0, velocityY: CGFloat(peak))
+        var total = 0
+        for _ in 0..<2_000 {
+            let tick = model.tick(elapsed: 1.0 / 120.0)
+            if case let .scroll(_, deltaY, _) = tick { total += Int(deltaY) }
+            if case .finished = tick { break }
+        }
+        #expect(Double(total) >= low * 0.95 && Double(total) <= high * 1.05)
+    }
+}
+
 @Suite("慣性模型")
 struct InertiaModelTests {
-    private static let decay = pow(0.998, 16.67)
+    private static let frame = 1.0 / 120.0
 
-    /// 跑到結束，回傳每一格送出的像素與結束時的狀態。
-    private func run(_ model: inout InertiaModel) -> (pixels: [Int32], ticks: Int, last: InertiaModel.Tick) {
+    /// 跑到結束，回傳每一格送出的像素（垂直）、格數與結束時的狀態。
+    private func run(
+        _ model: inout InertiaModel, elapsed: Double = InertiaModelTests.frame
+    ) -> (pixels: [Int32], ticks: Int, last: InertiaModel.Tick) {
         var pixels: [Int32] = []
         var ticks = 0
         while true {
-            let tick = model.tick()
+            let tick = model.tick(elapsed: elapsed)
             ticks += 1
             switch tick {
             case let .scroll(_, deltaY, _): pixels.append(deltaY)
             case .coasting: pixels.append(0)
             case .idle, .finished: return (pixels, ticks, tick)
             }
-            if ticks > 10_000 { return (pixels, ticks, tick) }
+            if ticks > 100_000 { return (pixels, ticks, tick) }
         }
     }
 
     @Test("沒啟動時 tick 什麼都不做")
     func idleByDefault() {
         var model = InertiaModel()
-        let tick = model.tick()
+        let tick = model.tick(elapsed: Self.frame)
         let stopped = model.stop()
         #expect(tick == .idle)
         #expect(stopped == false)
     }
 
-    @Test("每個 tick 速度乘上固定衰減，送出 0.8 倍速度的像素，第一筆是 began")
-    func decaysAndEmitsScaledPixels() {
+    @Test("速度依時間指數衰減，每一格送出這段時間走過的像素，第一筆是 began")
+    func decaysOverTime() {
         var model = InertiaModel()
-        model.start(velocityX: 0, velocityY: -100)
+        model.start(velocityX: 0, velocityY: -1_200)
 
-        let first = model.tick()
-        let second = model.tick()
-        // 100 × 0.9672 × 0.8 = 77.37 → -77，零頭 -0.37 留著；
-        // 下一格 93.54 × 0.8 = 74.84，加零頭 = -75.21 → -75。
-        #expect(first == .scroll(deltaX: 0, deltaY: -77, momentumPhase: 1))
-        #expect(second == .scroll(deltaX: 0, deltaY: -75, momentumPhase: 2))
-        #expect(abs(model.velocityY - (-100 * Self.decay * Self.decay)) < 1e-9)
+        let first = model.tick(elapsed: Self.frame)
+        let second = model.tick(elapsed: Self.frame)
+        let decay = exp(-Self.frame / 0.27)
+        // 1200 × decay ÷ 120 = 9.70 → -9，零頭 -0.70；下一格 9.40 + 0.70 = 10.1 → -10。
+        #expect(first == .scroll(deltaX: 0, deltaY: -9, momentumPhase: 1))
+        #expect(second == .scroll(deltaX: 0, deltaY: -10, momentumPhase: 2))
+        #expect(abs(Double(model.velocityY) - (-1_200 * decay * decay)) < 1e-6)
     }
 
-    @Test("送出的像素總和 = 0.8 × 速度總和，零頭不會丟掉")
-    func totalMatchesVelocityIntegral() {
+    @Test("滑行的總距離 ≈ 時間常數 ×（起始速度 − 停止速度），零頭不會丟掉")
+    func totalDistance() {
         var model = InertiaModel()
-        model.start(velocityX: 0, velocityY: 30)
+        model.start(velocityX: 0, velocityY: 840)
         let result = run(&model)
 
-        var velocity = 30.0
-        var expected = 0.0
-        while true {
-            velocity *= Double(Self.decay)
-            if velocity < 2 { break }
-            expected += velocity * 0.8
-        }
         let total = result.pixels.reduce(0) { $0 + Int($1) }
-        #expect(abs(Double(total) - expected) < 1)
+        #expect(abs(Double(total) - 0.27 * (840 - 120)) < 6)
         #expect(result.last == .finished(emitTerminal: true))
+        #expect(!model.isScrolling)
     }
 
-    @Test("越滑越慢：每一格送出的像素不會比前一格多超過 1（平滑減速，沒有固定速度的尾巴）")
+    @Test("螢幕更新率不影響滑行的距離與時間")
+    func independentOfTickRate() {
+        var at120 = InertiaModel()
+        var at60 = InertiaModel()
+        at120.start(velocityX: 1_500, velocityY: 0)
+        at60.start(velocityX: 1_500, velocityY: 0)
+
+        var distance120 = 0, distance60 = 0, time120 = 0.0, time60 = 0.0
+        while case let tick = at120.tick(elapsed: 1.0 / 120.0), tick != .idle {
+            if case let .scroll(deltaX, _, _) = tick { distance120 += Int(deltaX) }
+            if case .finished = tick { break }
+            time120 += 1.0 / 120.0
+        }
+        while case let tick = at60.tick(elapsed: 1.0 / 60.0), tick != .idle {
+            if case let .scroll(deltaX, _, _) = tick { distance60 += Int(deltaX) }
+            if case .finished = tick { break }
+            time60 += 1.0 / 60.0
+        }
+
+        #expect(abs(distance120 - distance60) <= 8)
+        #expect(abs(time120 - time60) < 0.03)
+    }
+
+    @Test("越滑越慢：每一格送出的像素不會比前一格多超過 1")
     func deceleratesSmoothly() {
         var model = InertiaModel()
-        model.start(velocityX: 0, velocityY: 30)
+        model.start(velocityX: 0, velocityY: 900)
         let pixels = run(&model).pixels
 
-        #expect(pixels.first == 23)                 // 30 × 0.9672 × 0.8
+        #expect(pixels.first == 7)                  // 900 × decay ÷ 120
         #expect((pixels.last ?? 99) <= 2)
         for (previous, next) in zip(pixels, pixels.dropFirst()) {
             #expect(next <= previous + 1)
         }
     }
 
-    @Test("兩軸都慢到門檻以下就結束")
-    func finishesBelowMinimumVelocity() {
+    @Test("一開始就低於停止速度：直接結束，不用補結束事件")
+    func belowStopSpeedFromTheStart() {
         var model = InertiaModel()
-        model.start(velocityX: 30, velocityY: 0)
-        var result = run(&model)
-
-        // 30 × 0.9672ⁿ < 2 → 第 82 格結束。
-        #expect(result.ticks == 82)
-        #expect(result.last == .finished(emitTerminal: true))
-        #expect(!model.isScrolling)
-        result.last = model.tick()
-        #expect(result.last == .idle)
-    }
-
-    @Test("一開始就低於門檻：直接結束，不用補結束事件")
-    func belowThresholdFromTheStart() {
-        var model = InertiaModel()
-        model.start(velocityX: 1, velocityY: 1.5)
-        let tick = model.tick()
+        model.start(velocityX: 50, velocityY: 100)
+        let tick = model.tick(elapsed: Self.frame)
         #expect(tick == .finished(emitTerminal: false))
     }
 
-    @Test("速度很低、這一格攢不到一個像素時不送事件")
-    func coastsWithoutEmittingBelowOnePixel() {
+    @Test("這一格攢不到一個像素時不送事件；時間長度不合理時不前進")
+    func coastsWithoutEmitting() {
         var model = InertiaModel()
-        model.minimumVelocity = 0.5
-        model.start(velocityX: 0, velocityY: 1)     // 每格約 0.77 px
-        let first = model.tick()
-        let second = model.tick()
+        model.stopSpeed = 10
+        model.start(velocityX: 0, velocityY: 60)     // 每格 0.5 px
+        let first = model.tick(elapsed: Self.frame)
+        let second = model.tick(elapsed: Self.frame)
+        let invalid = model.tick(elapsed: 0)
+        let negative = model.tick(elapsed: -1)
         #expect(first == .coasting)
-        #expect(second == .scroll(deltaX: 0, deltaY: 1, momentumPhase: 1))
+        #expect(second == .coasting || second == .scroll(deltaX: 0, deltaY: 1, momentumPhase: 1))
+        #expect(invalid == .coasting)
+        #expect(negative == .coasting)
     }
 
     @Test("中途喊停：送過事件才需要補結束事件")
     func stopReportsWhetherTerminalIsNeeded() {
         var model = InertiaModel()
-        model.start(velocityX: 0, velocityY: 200)
+        model.start(velocityX: 0, velocityY: 2_000)
         let beforeAnyTick = model.stop()
         #expect(beforeAnyTick == false)
 
-        model.start(velocityX: 0, velocityY: 200)
-        _ = model.tick()
+        model.start(velocityX: 0, velocityY: 2_000)
+        _ = model.tick(elapsed: Self.frame)
         let afterTick = model.stop()
         #expect(afterTick == true)
         #expect(model.velocityY == 0)
@@ -333,18 +394,18 @@ struct InertiaModelTests {
 
         let started = model.start(velocityX: 1e30, velocityY: -1e30)
         #expect(started)
-        let tick = model.tick()
+        let tick = model.tick(elapsed: Self.frame)
         #expect(tick == .scroll(deltaX: .max, deltaY: .min, momentumPhase: 1))
     }
 
     @Test("重新啟動會重新從 began 開始，零頭也歸零")
     func restartResetsPhase() {
         var model = InertiaModel()
-        model.start(velocityX: 0, velocityY: 100)
-        _ = model.tick()
-        model.start(velocityX: 0, velocityY: 100)
-        let tick = model.tick()
-        #expect(tick == .scroll(deltaX: 0, deltaY: 77, momentumPhase: 1))
+        model.start(velocityX: 0, velocityY: 1_200)
+        _ = model.tick(elapsed: Self.frame)
+        model.start(velocityX: 0, velocityY: 1_200)
+        let tick = model.tick(elapsed: Self.frame)
+        #expect(tick == .scroll(deltaX: 0, deltaY: 9, momentumPhase: 1))
     }
 }
 

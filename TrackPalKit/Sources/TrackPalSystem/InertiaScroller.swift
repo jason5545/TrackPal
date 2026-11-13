@@ -4,16 +4,16 @@ import TrackPalCore
 
 /// 放開後的慣性捲動：用螢幕的 display link 驅動 `InertiaModel`。
 ///
-/// 模型的一個 tick 對應螢幕更新一次。display link 掉幀或以較低頻率觸發時，
-/// 一次回呼會補跑對應數量的 tick，所以總距離與減速的時間感不受回呼頻率影響。
+/// 每次回呼把這一格的時間長度交給模型，所以滑行的距離與時間跟螢幕更新率、
+/// 掉不掉幀無關。
 @MainActor
 public final class InertiaScroller: NSObject {
     public var isEnabled = true
 
     private var model = InertiaModel()
     private var displayLink: CADisplayLink?
-    /// 這條 display link 所屬螢幕的更新率；一個 tick 就是 1/這個值 秒。
-    private var ticksPerSecond: Double = 60
+    /// 上一次回呼的時間；nil 表示這一輪滑行的第一格。
+    private var lastTimestamp: CFTimeInterval?
     private let postScroll: (Int32, Int32) -> Void
 
     /// `postScroll` 收到的是 (deltaX, deltaY) 像素。
@@ -21,11 +21,13 @@ public final class InertiaScroller: NSObject {
         self.postScroll = postScroll
     }
 
+    /// 開始滑行。速度是像素／秒。
     public func start(velocityX: CGFloat, velocityY: CGFloat) {
         guard isEnabled,
               model.start(velocityX: velocityX, velocityY: velocityY) else {
             return
         }
+        lastTimestamp = nil
         startDisplayLink()
     }
 
@@ -42,42 +44,43 @@ public final class InertiaScroller: NSObject {
               let screen = NSScreen.main ?? NSScreen.screens.first else {
             return
         }
-        ticksPerSecond = Double(max(1, screen.maximumFramesPerSecond))
         let link = screen.displayLink(target: self, selector: #selector(step(_:)))
         link.add(to: .main, forMode: .common)
         displayLink = link
+        lastTimestamp = nil
     }
 
     private func stopDisplayLink() {
         displayLink?.invalidate()
         displayLink = nil
+        lastTimestamp = nil
     }
 
     @objc private func step(_ link: CADisplayLink) {
-        let interval = link.targetTimestamp - link.timestamp
-        let tickCount = interval.isFinite && interval > 0
-            ? max(1, Int((interval * ticksPerSecond).rounded()))
-            : 1
+        // 距離上一次回呼實際過了多久（第一格用這一格的標稱長度）；異常值
+        // （畫面休眠回來、回呼被卡住）夾在合理範圍內。
+        let interval = lastTimestamp.map { link.timestamp - $0 }
+            ?? (link.targetTimestamp - link.timestamp)
+        lastTimestamp = link.timestamp
+        let elapsed = interval.isFinite && interval > 0
+            ? min(interval, 0.05)
+            : 1.0 / 60.0
 
-        for _ in 0..<min(tickCount, 8) {
-            switch model.tick() {
-            case .idle:
-                stopDisplayLink()
-                return
+        switch model.tick(elapsed: elapsed) {
+        case .idle:
+            stopDisplayLink()
 
-            case .coasting:
-                continue
+        case .coasting:
+            break
 
-            case let .scroll(deltaX, deltaY, _):
-                postScroll(deltaX, deltaY)
+        case let .scroll(deltaX, deltaY, _):
+            postScroll(deltaX, deltaY)
 
-            case let .finished(emitTerminal):
-                if emitTerminal {
-                    postScroll(0, 0)
-                }
-                stopDisplayLink()
-                return
+        case let .finished(emitTerminal):
+            if emitTerminal {
+                postScroll(0, 0)
             }
+            stopDisplayLink()
         }
     }
 }
