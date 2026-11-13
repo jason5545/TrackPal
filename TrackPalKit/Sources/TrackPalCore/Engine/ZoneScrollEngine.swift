@@ -81,15 +81,6 @@ public final class ZoneScrollEngine {
 
     // MARK: - Tuning constants
 
-    /// 靈敏度 1.0 時，手指滑過整個觸控板高度（normalized 1.0）捲動的像素數。
-    ///
-    /// 2026-11-13 以前這個值是 100，但送出去的事件被系統量化成 8 px 一格
-    /// （每筆事件不論 1–19 px 一律變成 8）。實機軌跡裡 93–96% 的事件原始值
-    /// 是 1 px，等於實際上是 800 px、而且只能 8 px 一跳。改成真正逐像素時把
-    /// 這個倍率寫進來，同樣的靈敏度設定捲動量不變（用 3,758 筆實機軌跡重算，
-    /// 每次接觸新舊比值的中位數是 1.00），只是變成 1 px 一格。
-    static let pixelsPerUnitTravel: CGFloat = 800
-
     let velocityHistorySize = 5
     let minimumActivationSampleDistance: CGFloat = 0.0005
     let minimumEvidenceActivityDistance: CGFloat = 0.00005

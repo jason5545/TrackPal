@@ -14,6 +14,7 @@ public final class ScrollEventInterceptor: @unchecked Sendable {
     private let suppression: ScrollSuppressionState
     private let log: @Sendable (String) -> Void
     private let replayClick: ClickReplayer
+    private let foreignScrollObserver: (@Sendable (CGEvent) -> Void)?
 
     private struct State {
         var eventTap: CFMachPort?
@@ -27,6 +28,7 @@ public final class ScrollEventInterceptor: @unchecked Sendable {
     public init(
         suppression: ScrollSuppressionState,
         log: @escaping @Sendable (String) -> Void,
+        foreignScrollObserver: (@Sendable (CGEvent) -> Void)? = nil,
         replayClick: @escaping ClickReplayer = { snapshot, location in
             SyntheticEvents.postMousePair(
                 downType: .leftMouseDown,
@@ -40,6 +42,7 @@ public final class ScrollEventInterceptor: @unchecked Sendable {
     ) {
         self.suppression = suppression
         self.log = log
+        self.foreignScrollObserver = foreignScrollObserver
         self.replayClick = replayClick
     }
 
@@ -179,8 +182,13 @@ public final class ScrollEventInterceptor: @unchecked Sendable {
         case .scrollWheel:
             // Suppress other scroll events while we're actively scrolling, but
             // never TrackPal's own.
+            let isOwn = SyntheticEvents.isOwnEvent(event)
+            if !isOwn {
+                // 校正用的觀察者：只看，不影響要不要擋。
+                foreignScrollObserver?(event)
+            }
             guard suppression.isActivelyScrolling else { return false }
-            return !SyntheticEvents.isOwnEvent(event)
+            return !isOwn
 
         default:
             return false

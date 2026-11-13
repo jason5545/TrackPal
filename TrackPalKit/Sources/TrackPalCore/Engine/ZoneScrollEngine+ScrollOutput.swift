@@ -37,6 +37,24 @@ extension ZoneScrollEngine {
         }
     }
 
+    /// 手指最近沿著捲動軸的速度（每秒幾個觸控板高）：最近幾幀的平均。水平方向
+    /// 乘上寬高比換成同樣的實體尺度。還沒有速度樣本時回傳一個中等的速度。
+    func recentAxisSpeed(for zone: ScrollZone) -> CGFloat {
+        guard !contact.velocityHistory.isEmpty else {
+            return NativeScrollCurve.nominalSpeed
+        }
+        let count = CGFloat(contact.velocityHistory.count)
+        switch zone {
+        case .leftEdge, .rightEdge:
+            return abs(contact.velocityHistory.reduce(0) { $0 + $1.vy } / count)
+        case .bottomEdge, .topEdge:
+            return abs(contact.velocityHistory.reduce(0) { $0 + $1.vx } / count)
+                * ScrollIntentGate.horizontalAspectCompensation
+        default:
+            return NativeScrollCurve.nominalSpeed
+        }
+    }
+
     func handleScroll(delta: CGPoint, zone: ScrollZone) {
         // Apply acceleration curve to delta
         let adjustedDelta = applyAccelerationCurve(delta)
@@ -46,7 +64,8 @@ extension ZoneScrollEngine {
             // Vertical scrolling - use Y delta
             // Natural scrolling: invert direction (swipe up = content moves up)
             contact.scrollAccumulatorY += -adjustedDelta.y
-                * configuration.scrollMultiplier * Self.pixelsPerUnitTravel
+                * configuration.scrollMultiplier
+                * NativeScrollCurve.contactGain(atSpeed: recentAxisSpeed(for: zone))
             isActivelyScrollingInZone = true
 
         case .bottomEdge, .topEdge:
@@ -64,7 +83,8 @@ extension ZoneScrollEngine {
             // Compensate for trackpad aspect ratio (~1.6:1 width:height)
             let aspectCompensation: CGFloat = 1.6
             contact.scrollAccumulatorX += adjustedDelta.x
-                * configuration.scrollMultiplier * Self.pixelsPerUnitTravel
+                * configuration.scrollMultiplier
+                * NativeScrollCurve.contactGain(atSpeed: recentAxisSpeed(for: zone))
                 * aspectCompensation
             isActivelyScrollingInZone = true
 

@@ -10,11 +10,18 @@ private final class DeviceCallbackBox: Sendable {
     let context: DeviceCallbackContext
     let engine: ZoneScrollEngine
     let logger: FileLogger
+    let nativeScrollRecorder: NativeScrollRecorder
 
-    init(context: DeviceCallbackContext, engine: ZoneScrollEngine, logger: FileLogger) {
+    init(
+        context: DeviceCallbackContext,
+        engine: ZoneScrollEngine,
+        logger: FileLogger,
+        nativeScrollRecorder: NativeScrollRecorder
+    ) {
         self.context = context
         self.engine = engine
         self.logger = logger
+        self.nativeScrollRecorder = nativeScrollRecorder
     }
 }
 
@@ -26,6 +33,7 @@ private final class DeviceCallbackBox: Sendable {
 final class MultitouchDeviceManager {
     private let engine: ZoneScrollEngine
     private let logger: FileLogger
+    private let nativeScrollRecorder: NativeScrollRecorder
 
     private var devices: [MTDeviceRef] = []
     /// Keeps the enumerated device objects alive while their raw refs are in use.
@@ -37,9 +45,14 @@ final class MultitouchDeviceManager {
     private var retiredBoxes: [DeviceCallbackBox] = []
     private var nextDeviceID = 0
 
-    init(engine: ZoneScrollEngine, logger: FileLogger) {
+    init(
+        engine: ZoneScrollEngine,
+        logger: FileLogger,
+        nativeScrollRecorder: NativeScrollRecorder
+    ) {
         self.engine = engine
         self.logger = logger
+        self.nativeScrollRecorder = nativeScrollRecorder
     }
 
     /// 列舉並啟動所有 multitouch 裝置。回傳這一輪的裝置 callback ID；
@@ -71,7 +84,8 @@ final class MultitouchDeviceManager {
             let box = DeviceCallbackBox(
                 context: DeviceCallbackContext(deviceID: nextDeviceID),
                 engine: engine,
-                logger: logger
+                logger: logger,
+                nativeScrollRecorder: nativeScrollRecorder
             )
             boxes.append(box)
             let refcon = Unmanaged.passUnretained(box).toOpaque()
@@ -148,6 +162,24 @@ private func touchCallback(
             majorAxis: touch.majorAxis,
             minorAxis: touch.minorAxis
         )
+    }
+
+    // 校正用：多指接觸的幀交給原生捲動的記錄器（預設關閉）。
+    if box.nativeScrollRecorder.isEnabled {
+        if numTouches == 0 {
+            box.nativeScrollRecorder.recordLift(
+                uptime: callbackUptime, timestamp: timestamp
+            )
+        } else if let touches {
+            let count = min(Int(numTouches), 5)
+            box.nativeScrollRecorder.recordFrame(
+                uptime: callbackUptime,
+                timestamp: timestamp,
+                points: (0..<count).map {
+                    (touches[$0].normalized.position.x, touches[$0].normalized.position.y)
+                }
+            )
+        }
     }
 
     guard let routed = box.context.routeContactFrame(

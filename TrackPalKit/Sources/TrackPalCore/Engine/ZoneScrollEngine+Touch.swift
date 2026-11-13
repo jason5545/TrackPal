@@ -396,30 +396,29 @@ extension ZoneScrollEngine {
         avgVx /= CGFloat(contact.velocityHistory.count)
         avgVy /= CGFloat(contact.velocityHistory.count)
 
-        // Convert to scroll velocity based on zone
-        // Natural scrolling: invert direction
+        // 放開時的慣性照原生雙指捲動的曲線（NativeScrollCurve）：手指速度換成
+        // 起始的像素速度，太慢就不滑。方向跟捲動一致。
         var scrollVelX: CGFloat = 0
         var scrollVelY: CGFloat = 0
 
         switch contact.currentZone {
         case .leftEdge, .rightEdge:
-            // Vertical scrolling - use Y velocity (inverted for natural scrolling)
-            // Reduced from *50 to *20 to prevent content flying past
-            scrollVelY = -avgVy * configuration.scrollMultiplier * 20
+            // Vertical scrolling - natural direction: finger up = content up.
+            let speed = NativeScrollCurve.momentumSpeed(atLiftSpeed: avgVy)
+            scrollVelY = (avgVy > 0 ? -speed : speed) * configuration.scrollMultiplier
         case .bottomEdge, .topEdge:
-            // Horizontal scrolling - use X velocity
-            // No sign inversion: trackpad +X = screen +X (both rightward)
-            // Compensate for trackpad aspect ratio (~1.6:1)
-            scrollVelX = avgVx * configuration.scrollMultiplier * 20 * 1.6
+            // Horizontal scrolling - trackpad +X = screen +X. The finger speed
+            // is scaled by the trackpad aspect ratio (~1.6:1) into the same
+            // physical units as vertical.
+            let speed = NativeScrollCurve.momentumSpeed(
+                atLiftSpeed: avgVx * ScrollIntentGate.horizontalAspectCompensation
+            )
+            scrollVelX = (avgVx > 0 ? speed : -speed) * configuration.scrollMultiplier
         default:
             return
         }
 
-        // Only start inertia if velocity is significant
-        // Below this: finger was slow/stationary — just stop, no coast
-        let minVelocityThreshold: CGFloat = 20.0
-
-        if abs(scrollVelX) > minVelocityThreshold || abs(scrollVelY) > minVelocityThreshold {
+        if scrollVelX != 0 || scrollVelY != 0 {
             effects.log(String(format: "Starting inertia vx=%.1f vy=%.1f", scrollVelX, scrollVelY))
             effects.startInertia(velocityX: scrollVelX, velocityY: scrollVelY)
         }

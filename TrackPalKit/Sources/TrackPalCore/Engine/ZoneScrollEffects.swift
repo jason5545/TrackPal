@@ -27,6 +27,7 @@ public protocol ZoneScrollEffects: AnyObject {
     /// 把游標放回指定位置，並取消 warp 之後預設 0.25 秒的滑鼠事件抑制。
     func warpPointer(to location: CGPoint)
 
+    /// 開始慣性捲動。速度是像素／秒。
     func startInertia(velocityX: CGFloat, velocityY: CGFloat)
     func stopInertia()
 
