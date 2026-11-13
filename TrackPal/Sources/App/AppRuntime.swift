@@ -33,14 +33,19 @@ final class AppRuntime {
             suppression: suppression,
             log: { logger.log($0) }
         )
-        let inertia = InertiaScroller()
+        // 手指跟隨的捲動與慣性共用同一個出口。
+        let scrollPoster = ScrollEventPoster()
+        let inertia = InertiaScroller { deltaX, deltaY in
+            scrollPoster.post(deltaX: deltaX, deltaY: deltaY)
+        }
         let engine = ZoneScrollEngine(
             configuration: settings.configuration,
             effects: LiveZoneScrollEffects(
                 logger: logger,
                 interceptor: interceptor,
                 inertia: inertia,
-                traceWriter: GestureTraceFileWriter()
+                traceWriter: GestureTraceFileWriter(),
+                scrollPoster: scrollPoster
             ),
             suppression: suppression
         )

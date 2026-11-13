@@ -16,11 +16,8 @@ public final class InertiaScroller: NSObject {
     private var ticksPerSecond: Double = 60
     private let postScroll: (Int32, Int32) -> Void
 
-    public init(
-        postScroll: @escaping (Int32, Int32) -> Void = { deltaX, deltaY in
-            SyntheticEvents.postScroll(deltaX: deltaX, deltaY: deltaY)
-        }
-    ) {
+    /// `postScroll` 收到的是 (deltaX, deltaY) 像素。
+    public init(postScroll: @escaping (Int32, Int32) -> Void) {
         self.postScroll = postScroll
     }
 
@@ -67,6 +64,9 @@ public final class InertiaScroller: NSObject {
             case .idle:
                 stopDisplayLink()
                 return
+
+            case .coasting:
+                continue
 
             case let .scroll(deltaX, deltaY, _):
                 postScroll(deltaX, deltaY)

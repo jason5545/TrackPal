@@ -6,9 +6,13 @@ import Testing
 /// 回歸指紋：固定 seed 的隨機情境丟進狀態機，整串輸出（每一筆捲動、點擊、
 /// 日誌、旗標變化）的 SHA-256 必須跟記錄的值一樣。
 ///
-/// 這批指紋是 2026-11-13 重構時建立的：當時新狀態機與重構前的程式碼在
-/// 6,000 組情境與 3,758 筆實機軌跡上的輸出逐位元相同。之後任何重構只要讓
-/// 指紋變了，就代表某個可觀察的行為（或日誌文字）改了。
+/// 來歷：2026-11-13 重構時，新狀態機與重構前的程式碼（140fdf4）在 6,000 組
+/// 情境與 3,758 筆實機軌跡上的輸出逐位元相同，當時的指紋是用重構前的輸出
+/// 算的（commit 9460c38）。同一天把捲動改成逐像素、換算倍率從 100 改成 800，
+/// 指紋隨之更新；那次改動前後，21,538 次接觸與 3,758 筆實機軌跡的判定結果
+/// 沒有任何一筆不同，變的只有捲動的像素數量與連帶的紀錄。
+///
+/// 之後任何重構只要讓指紋變了，就代表某個可觀察的行為（或日誌文字）改了。
 ///
 /// 刻意改行為或改日誌格式時，用下面的指令印出新的指紋，貼回 `expected`：
 ///
@@ -20,22 +24,22 @@ struct EngineGoldenTests {
 
     static let expected: [String] = [
         // GOLDEN-BEGIN
-        "2d386de134128fb1daa2d0e7f1f2411824434a949302f605c567b9631f85400c",
-        "c6eca742f0d24925b9290c483222a751f63becf2003abbcdab7f0928cafd3337",
-        "b8df42f251897fa34d2bf3b8f6f8383d218cdc2a334e1ecf9f12a6482075427d",
-        "395b7094ec82bcf72549edc3847b0ecc80ecdb142e09e273ca949d3264cc29c8",
-        "808789873d84085ff047140789e8e6ea8944e9d451aa9a46b69afc1392343784",
-        "c34949c0e548a71e18b38e3b3f21b78b6ee9bceec47d4407197c38bec56c5bf0",
-        "08f452651e9b64b9f65d276903c6b2080ac40b67b159824d22e6d997ae3514a3",
-        "0f6aa84a776827bc2eac443a28e75428b17403454c7dda618015fa57067dfbba",
-        "ef323338a18ee9c9f21e50b3d0943f6ca8f50ed5df553af74c99556dbbe3d446",
-        "efe48b76eb6d97d41bf8975b032118708599cfcdc3ec6e7828e1140347f03086",
-        "581650c8359a633db2c3d48b87438ef42b913df591dccb30ab02cab7f536067c",
-        "ab41275ce40e452a54f79a2f42d071c0a88611b07cce94413d12163e4367261d",
-        "51163194e430784e55febf7162591d321e6e36550adc5540ffc90a3b2331e1cd",
-        "5e87701eb009d128ce9f3725c5c39fcebdfabbcd83a36390e8330419476d9b8e",
-        "756c017b5da7834ede3b2eb3201a62def394d387eb351a72551bddf2ceb38aad",
-        "a265fa615141d897f8f4074e519159c00068df4042f54a04ebb2dbf151f038f4",
+        "9115a7763c53a9e2e2e3b9f0202b6ba25e8f5a9b79f350ab517e2194dca38c28",
+        "170a1ee205d3638ef59abacae648bcd67e96ee3cbf37ee643e4b20b4d8ed1781",
+        "ae7a40c2f00970d7e32794f64789b5723f242e80ca0160f375cddc297ffd336e",
+        "b2998aed6c0e1e484ae89e3c36bae22275949fab7d3152685a3dc134bf0a8fa5",
+        "6a335af3198c9fb5fa0351d6b97b6dd21e646ccb5603dc6c8428b1518a307d5a",
+        "add8139155ddde86811402a65c3af44c7620de06ad2acdb368d5f4f031bb6cc1",
+        "e6726827a4c4f6d114494b30e6551fba7f30cbb4061e7311590aba43eddcce30",
+        "e0401540e210c6a982ea6cc3161cf87f694d30eccb61dfa31568e140cffb9a42",
+        "7aaf31b4cc6811fdba536e96ad96fb2c6ce38571b03be2d275f6aed1ffd54c91",
+        "d04b476097f28121301d177400ca411571481b79b5873e8fb91e836d56e323a1",
+        "ca1dd318dc740c5c6e04f29d2b69302057b3f67c45cb68c3779bc25b87170dc1",
+        "c4f5b80cfcfb25aed42d6c95c6427ca553b5fd10f0696466a5f89f0d0e4773a3",
+        "8be1e25b8f71375f7cf8d8935084a8d0adcf18578c9af8534bd69aa66ef9626a",
+        "bdee269c3c5b05ce5f4f763b413012c2b1f9ae1d5a0a7dc65328345e617177a4",
+        "86b5c4018d49be003cc211d1e6734070687d9b3b0f007100284c7d32fbbcf52e",
+        "d7cbce4e114652b8c77d35e3a1c17311f76e078048c70c296ecb9a38f5d448f3",
         // GOLDEN-END
     ]
 

@@ -45,7 +45,8 @@ extension ZoneScrollEngine {
         case .leftEdge, .rightEdge:
             // Vertical scrolling - use Y delta
             // Natural scrolling: invert direction (swipe up = content moves up)
-            contact.scrollAccumulatorY += -adjustedDelta.y * configuration.scrollMultiplier * 100
+            contact.scrollAccumulatorY += -adjustedDelta.y
+                * configuration.scrollMultiplier * Self.pixelsPerUnitTravel
             isActivelyScrollingInZone = true
 
         case .bottomEdge, .topEdge:
@@ -62,7 +63,9 @@ extension ZoneScrollEngine {
             // (unlike vertical where trackpad +Y=up but screen +Y=down)
             // Compensate for trackpad aspect ratio (~1.6:1 width:height)
             let aspectCompensation: CGFloat = 1.6
-            contact.scrollAccumulatorX += adjustedDelta.x * configuration.scrollMultiplier * 100 * aspectCompensation
+            contact.scrollAccumulatorX += adjustedDelta.x
+                * configuration.scrollMultiplier * Self.pixelsPerUnitTravel
+                * aspectCompensation
             isActivelyScrollingInZone = true
 
         case .center, .none, .middleClick,

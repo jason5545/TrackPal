@@ -9,13 +9,16 @@ public final class LiveZoneScrollEffects: ZoneScrollEffects {
     private let interceptor: ScrollEventInterceptor
     private let inertia: InertiaScroller
     private let traceWriter: GestureTraceFileWriter
+    private let scrollPoster: ScrollEventPoster
 
     public init(
         logger: FileLogger,
         interceptor: ScrollEventInterceptor,
         inertia: InertiaScroller,
-        traceWriter: GestureTraceFileWriter
+        traceWriter: GestureTraceFileWriter,
+        scrollPoster: ScrollEventPoster
     ) {
+        self.scrollPoster = scrollPoster
         self.logger = logger
         self.interceptor = interceptor
         self.inertia = inertia
@@ -33,7 +36,7 @@ public final class LiveZoneScrollEffects: ZoneScrollEffects {
     public func postScroll(
         deltaX: Int32, deltaY: Int32, scrollPhase: Int64, momentumPhase: Int64
     ) {
-        SyntheticEvents.postScroll(deltaX: deltaX, deltaY: deltaY)
+        scrollPoster.post(deltaX: deltaX, deltaY: deltaY)
     }
 
     public func postMiddleClick() -> Bool {

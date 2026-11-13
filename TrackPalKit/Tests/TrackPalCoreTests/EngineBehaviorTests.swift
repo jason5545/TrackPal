@@ -37,7 +37,7 @@ struct EngineBehaviorTests {
         #expect(result.totalScrollY > 0)
     }
 
-    @Test("捲動量 = 位移 × 靈敏度 × 100，次像素不會丟掉")
+    @Test("捲動量 = 位移 × 靈敏度 × 800，次像素不會丟掉")
     func scrollDistanceMatchesMultiplier() {
         var script = ContactScript()
         script.down(0.95, 0.3)
@@ -47,9 +47,23 @@ struct EngineBehaviorTests {
         let atOne = script.run { $0.scrollMultiplier = 1 }
         let atThree = script.run { $0.scrollMultiplier = 3 }
 
-        // 0.2 × 100 = 20 px；最後不足一個像素的零頭留在累加器裡。
-        #expect((-20 ... -19).contains(atOne.totalScrollY))
-        #expect((-60 ... -59).contains(atThree.totalScrollY))
+        // 0.2 × 800 = 160 px；最後不足一個像素的零頭留在累加器裡。
+        #expect((-160 ... -159).contains(atOne.totalScrollY))
+        #expect((-480 ... -479).contains(atThree.totalScrollY))
+    }
+
+    @Test("慢慢滑也是逐像素：每一幀送出的位移很小，不會攢成一大格")
+    func slowScrollIsPixelPrecise() {
+        var script = ContactScript()
+        script.down(0.95, 0.3)
+        script.move(dx: 0, dy: 0.002, frames: 60)   // 每幀 1.6 px
+        script.lift()
+        let result = script.run { $0.scrollMultiplier = 1 }
+
+        // 啟動那一刻會補送判斷期間緩衝的位移，之後每幀只有 1–2 px。
+        let steady = result.scrolls.dropFirst(3).map { abs($0.deltaY) }
+        #expect(steady.count > 40)
+        #expect(steady.allSatisfy { (1...2).contains($0) })
     }
 
     @Test("在邊緣區輕點：不捲動，也不留下凍住的游標")

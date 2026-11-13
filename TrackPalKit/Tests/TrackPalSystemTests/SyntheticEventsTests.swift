@@ -27,98 +27,86 @@ struct SyntheticEventsTests {
         #expect(String(decoding: bytes, as: UTF8.self) == "TRPL")
     }
 
-    @Test("捲動事件：連續捲動標記、phase 全部是 0、行位移、蓋上簽章")
+    @Test("捲動事件：連續捲動標記、phase 全部是 0、蓋上簽章")
     func scrollEventFields() throws {
-        let event = try #require(SyntheticEvents.makeScrollEvent(deltaX: -42, deltaY: 7))
+        let event = try #require(SyntheticEvents.makeScrollEvent(
+            deltaX: -42, deltaY: 7, lineX: -5, lineY: 1
+        ))
 
         #expect(event.type == .scrollWheel)
         #expect(SyntheticEvents.isOwnEvent(event))
         #expect(event.getIntegerValueField(.scrollWheelEventIsContinuous) == 1)
-        // axis1 是垂直、axis2 是水平。
-        #expect(event.getIntegerValueField(.scrollWheelEventDeltaAxis1) == 1)
-        #expect(event.getIntegerValueField(.scrollWheelEventDeltaAxis2) == -4)
         #expect(event.getIntegerValueField(.scrollWheelEventFixedPtDeltaAxis1) == 0)
         #expect(event.getIntegerValueField(.scrollWheelEventFixedPtDeltaAxis2) == 0)
         #expect(event.getIntegerValueField(.scrollWheelEventScrollPhase) == 0)
         #expect(event.getIntegerValueField(.scrollWheelEventMomentumPhase) == 0)
     }
 
-    /// 這是目前出貨的行為，不是理想值：設定行位移時系統把像素位移重算成
-    /// 「行位移 × 8」。捲動手感建立在這組數值上，見 `makeScrollEvent` 的說明。
-    @Test("App 實際收到的像素位移 = 行位移 × 8", arguments: [
-        (Int32(1), Int64(8)), (9, 8), (19, 8), (20, 16), (42, 32), (100, 80),
-        (-1, -8), (-25, -16), (0, 0),
+    /// 設定順序錯了的話，系統會把像素位移重算成「行位移 × 8」
+    /// （見 `makeScrollEvent` 的說明）。這條測試讀回實際的欄位值。
+    @Test("App 收到的像素位移就是指定的值，行位移也各自獨立", arguments: [
+        (Int32(1), Int32(0)), (3, 0), (5, 1), (7, 0), (19, 2), (42, 5), (300, 37),
+        (-1, 0), (-25, -3), (0, 0), (2, 1), (9, -1),
     ])
-    func deliveredPointDeltaIsQuantized(pixels: Int32, delivered: Int64) throws {
-        let vertical = try #require(SyntheticEvents.makeScrollEvent(deltaX: 0, deltaY: pixels))
-        #expect(vertical.getIntegerValueField(.scrollWheelEventPointDeltaAxis1) == delivered)
+    func pointAndLineDeltasAreIndependent(pixels: Int32, lines: Int32) throws {
+        let vertical = try #require(SyntheticEvents.makeScrollEvent(
+            deltaX: 0, deltaY: pixels, lineX: 0, lineY: lines
+        ))
+        // axis1 是垂直、axis2 是水平。
+        #expect(vertical.getIntegerValueField(.scrollWheelEventPointDeltaAxis1) == Int64(pixels))
         #expect(vertical.getIntegerValueField(.scrollWheelEventPointDeltaAxis2) == 0)
+        #expect(vertical.getIntegerValueField(.scrollWheelEventDeltaAxis1) == Int64(lines))
+        #expect(vertical.getIntegerValueField(.scrollWheelEventDeltaAxis2) == 0)
 
-        let horizontal = try #require(SyntheticEvents.makeScrollEvent(deltaX: pixels, deltaY: 0))
-        #expect(horizontal.getIntegerValueField(.scrollWheelEventPointDeltaAxis2) == delivered)
+        let horizontal = try #require(SyntheticEvents.makeScrollEvent(
+            deltaX: pixels, deltaY: 0, lineX: lines, lineY: 0
+        ))
+        #expect(horizontal.getIntegerValueField(.scrollWheelEventPointDeltaAxis2) == Int64(pixels))
         #expect(horizontal.getIntegerValueField(.scrollWheelEventPointDeltaAxis1) == 0)
+        #expect(horizontal.getIntegerValueField(.scrollWheelEventDeltaAxis2) == Int64(lines))
+        #expect(horizontal.getIntegerValueField(.scrollWheelEventFixedPtDeltaAxis2) == 0)
     }
 
-    /// 重構前 `TrackpadZoneScroller.postScrollEvent` 的建構方式，逐字保留。
-    private func legacyScrollEvent(deltaX: Int32, deltaY: Int32) -> CGEvent? {
-        let source = CGEventSource(stateID: .combinedSessionState)
-        guard let event = CGEvent(
-            scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
-            wheel1: deltaY, wheel2: deltaX, wheel3: 0
-        ) else { return nil }
-        event.setIntegerValueField(.eventSourceUserData, value: 0x5452504C)
-        event.setIntegerValueField(CGEventField(rawValue: 99)!, value: 0)
-        event.setIntegerValueField(CGEventField(rawValue: 123)!, value: 0)
-        event.setIntegerValueField(CGEventField(rawValue: 88)!, value: 1)
-        event.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: Int64(deltaY))
-        event.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: Int64(deltaX))
-        if deltaY != 0 {
-            let lineDY = deltaY > 0 ? max(Int32(1), deltaY / 10) : min(Int32(-1), deltaY / 10)
-            event.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: Int64(lineDY))
-        }
-        if deltaX != 0 {
-            let lineDX = deltaX > 0 ? max(Int32(1), deltaX / 10) : min(Int32(-1), deltaX / 10)
-            event.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: Int64(lineDX))
-        }
-        event.setIntegerValueField(.scrollWheelEventFixedPtDeltaAxis1, value: 0)
-        event.setIntegerValueField(.scrollWheelEventFixedPtDeltaAxis2, value: 0)
-        return event
+    @Test("兩軸同時有位移時互不干擾")
+    func bothAxes() throws {
+        let event = try #require(SyntheticEvents.makeScrollEvent(
+            deltaX: -42, deltaY: 7, lineX: -5, lineY: 0
+        ))
+        #expect(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1) == 7)
+        #expect(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2) == -42)
+        #expect(event.getIntegerValueField(.scrollWheelEventDeltaAxis1) == 0)
+        #expect(event.getIntegerValueField(.scrollWheelEventDeltaAxis2) == -5)
     }
 
-    @Test("每一個欄位都跟重構前建構出來的事件相同")
-    func matchesLegacyConstructionFieldByField() throws {
-        let fields: [CGEventField] = [
-            .eventSourceUserData,
-            .scrollWheelEventDeltaAxis1, .scrollWheelEventDeltaAxis2, .scrollWheelEventDeltaAxis3,
-            .scrollWheelEventFixedPtDeltaAxis1, .scrollWheelEventFixedPtDeltaAxis2,
-            .scrollWheelEventPointDeltaAxis1, .scrollWheelEventPointDeltaAxis2,
-            .scrollWheelEventIsContinuous, .scrollWheelEventScrollPhase,
-            .scrollWheelEventMomentumPhase, .scrollWheelEventScrollCount,
-            .scrollWheelEventInstantMouser,
-        ]
-        let values: [Int32] = [-250, -42, -20, -19, -10, -9, -1, 0, 1, 2, 7, 9, 10, 11, 19, 20, 99, 300]
-        for deltaX in values {
-            for deltaY in values {
-                let current = try #require(SyntheticEvents.makeScrollEvent(deltaX: deltaX, deltaY: deltaY))
-                let legacy = try #require(legacyScrollEvent(deltaX: deltaX, deltaY: deltaY))
-                #expect(current.type == legacy.type)
-                for field in fields {
-                    #expect(
-                        current.getIntegerValueField(field) == legacy.getIntegerValueField(field),
-                        "(\(deltaX), \(deltaY)) 欄位 \(field.rawValue)"
-                    )
-                }
-            }
-        }
-    }
-
-    @Test("零位移的捲動事件（慣性結束時送的那一筆）也建得出來")
+    @Test("零位移的捲動事件（捲動或慣性結束時送的那一筆）也建得出來")
     func zeroDeltaScrollEvent() throws {
-        let event = try #require(SyntheticEvents.makeScrollEvent(deltaX: 0, deltaY: 0))
+        let event = try #require(SyntheticEvents.makeScrollEvent(
+            deltaX: 0, deltaY: 0, lineX: 0, lineY: 0
+        ))
         #expect(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1) == 0)
         #expect(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2) == 0)
         #expect(event.getIntegerValueField(.scrollWheelEventDeltaAxis1) == 0)
         #expect(event.getIntegerValueField(.scrollWheelEventIsContinuous) == 1)
+    }
+
+    @MainActor
+    @Test("發送出口：像素原樣送出，行位移每 8 px 一行、零頭跨事件累加")
+    func posterAccumulatesLines() {
+        var sent: [CGEvent] = []
+        let poster = ScrollEventPoster { sent.append($0) }
+        for _ in 0..<6 { poster.post(deltaX: 0, deltaY: -3) }      // 共 -18 px
+        poster.post(deltaX: 20, deltaY: 0)
+        poster.post(deltaX: 0, deltaY: 0)
+
+        #expect(sent.count == 8)
+        #expect(sent.prefix(6).map { $0.getIntegerValueField(.scrollWheelEventPointDeltaAxis1) }
+            == [-3, -3, -3, -3, -3, -3])
+        #expect(sent.prefix(6).map { $0.getIntegerValueField(.scrollWheelEventDeltaAxis1) }
+            == [0, 0, -1, 0, 0, -1])
+        #expect(sent[6].getIntegerValueField(.scrollWheelEventPointDeltaAxis2) == 20)
+        #expect(sent[6].getIntegerValueField(.scrollWheelEventDeltaAxis2) == 2)
+        #expect(sent[7].getIntegerValueField(.scrollWheelEventPointDeltaAxis1) == 0)
+        #expect(sent.allSatisfy(SyntheticEvents.isOwnEvent))
     }
 
     @Test("滑鼠按鍵成對建立：位置、修飾鍵、clickState 兩邊一致，都有簽章")

@@ -65,7 +65,7 @@ struct ScrollEventInterceptorTests {
 
         #expect(interceptor.shouldSuppress(type: .scrollWheel, event: try foreignScroll()))
         #expect(interceptor.shouldSuppress(type: .mouseMoved, event: try mouseEvent(.mouseMoved, at: 1)))
-        let own = try #require(SyntheticEvents.makeScrollEvent(deltaX: 0, deltaY: 3))
+        let own = try #require(SyntheticEvents.makeScrollEvent(deltaX: 0, deltaY: 3, lineX: 0, lineY: 0))
         #expect(!interceptor.shouldSuppress(type: .scrollWheel, event: own))
     }
 

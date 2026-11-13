@@ -149,107 +149,202 @@ struct ScrollOutputTests {
         // 很小的位移係數趨近 0.5。
         #expect(abs(ease.applyAccelerationCurve(CGPoint(x: 0.0001, y: 0)).x - 0.00005) < 1e-7)
     }
+}
 
-    @Test("行位移 = 像素 ÷ 10，但只要有像素就至少 ±1", arguments: [
-        (0, 0), (1, 1), (9, 1), (10, 1), (25, 2), (-1, -1), (-9, -1), (-37, -3),
-    ])
-    func lineDeltas(pixels: Int32, expected: Int32) {
-        #expect(ScrollWheelDeltas.lineDelta(forPixels: pixels) == expected)
+@Suite("行位移的累加")
+struct LineDeltaAccumulatorTests {
+    @Test("每 8 個像素算一行，零頭留到下一筆")
+    func carriesRemainder() {
+        var accumulator = LineDeltaAccumulator()
+        var lines: [Int32] = []
+        for pixels: Int32 in [3, 3, 3, 3, 3, 1] {      // 共 16 px
+            lines.append(accumulator.lines(forPixels: pixels))
+        }
+        #expect(lines == [0, 0, 1, 0, 0, 1])
     }
 
-    @Test("ScrollWheelDeltas 兩軸各自換算")
-    func scrollWheelDeltas() {
-        let deltas = ScrollWheelDeltas(pixelX: -42, pixelY: 3)
-        #expect(deltas.lineX == -4)
-        #expect(deltas.lineY == 1)
+    @Test("不管事件切多細，行數總和只跟像素總和有關")
+    func totalIsIndependentOfChunking() {
+        var fine = LineDeltaAccumulator()
+        var coarse = LineDeltaAccumulator()
+        var fineTotal: Int32 = 0
+        for _ in 0..<400 { fineTotal += fine.lines(forPixels: 1) }
+        let coarseTotal = coarse.lines(forPixels: 400)
+        #expect(fineTotal == 50)
+        #expect(coarseTotal == 50)
+    }
+
+    @Test("反方向的位移會抵銷零頭；負向同樣每 8 px 一行")
+    func handlesDirectionChanges() {
+        var accumulator = LineDeltaAccumulator()
+        let forward = accumulator.lines(forPixels: 7)
+        let back = accumulator.lines(forPixels: -7)
+        let negative = accumulator.lines(forPixels: -8)
+        let more = accumulator.lines(forPixels: -20)
+        #expect(forward == 0)
+        #expect(back == 0)
+        #expect(negative == -1)
+        #expect(more == -2)        // 零頭 -4 留著
+        let rest = accumulator.lines(forPixels: -4)
+        #expect(rest == -1)
+    }
+
+    @Test("零位移不產生行位移；reset 清掉零頭")
+    func zeroAndReset() {
+        var accumulator = LineDeltaAccumulator()
+        _ = accumulator.lines(forPixels: 7)
+        let zero = accumulator.lines(forPixels: 0)
+        #expect(zero == 0)
+        accumulator.reset()
+        let afterReset = accumulator.lines(forPixels: 7)
+        #expect(afterReset == 0)
     }
 }
 
 @Suite("慣性模型")
 struct InertiaModelTests {
+    private static let decay = pow(0.998, 16.67)
+
+    /// 跑到結束，回傳每一格送出的像素與結束時的狀態。
+    private func run(_ model: inout InertiaModel) -> (pixels: [Int32], ticks: Int, last: InertiaModel.Tick) {
+        var pixels: [Int32] = []
+        var ticks = 0
+        while true {
+            let tick = model.tick()
+            ticks += 1
+            switch tick {
+            case let .scroll(_, deltaY, _): pixels.append(deltaY)
+            case .coasting: pixels.append(0)
+            case .idle, .finished: return (pixels, ticks, tick)
+            }
+            if ticks > 10_000 { return (pixels, ticks, tick) }
+        }
+    }
+
     @Test("沒啟動時 tick 什麼都不做")
     func idleByDefault() {
         var model = InertiaModel()
-        do { let value = model.tick(); #expect(value == .idle) }
-        do { let value = model.stop(); #expect(value == false) }
+        let tick = model.tick()
+        let stopped = model.stop()
+        #expect(tick == .idle)
+        #expect(stopped == false)
     }
 
-    @Test("每個 tick 速度乘上固定衰減，像素往零截斷，第一筆是 began")
-    func decaysAndTruncates() {
+    @Test("每個 tick 速度乘上固定衰減，送出 0.8 倍速度的像素，第一筆是 began")
+    func decaysAndEmitsScaledPixels() {
         var model = InertiaModel()
         model.start(velocityX: 0, velocityY: -100)
-        let decay = pow(0.998, 16.67)
 
-        do { let value = model.tick(); #expect(value == .scroll(deltaX: 0, deltaY: Int32(-100 * decay), momentumPhase: 1)) }
-        do { let value = model.tick(); #expect(value == .scroll(deltaX: 0, deltaY: Int32(-100 * decay * decay), momentumPhase: 2)) }
-        #expect(abs(model.velocityY - (-100 * decay * decay)) < 1e-9)
+        let first = model.tick()
+        let second = model.tick()
+        // 100 × 0.9672 × 0.8 = 77.37 → -77，零頭 -0.37 留著；
+        // 下一格 93.54 × 0.8 = 74.84，加零頭 = -75.21 → -75。
+        #expect(first == .scroll(deltaX: 0, deltaY: -77, momentumPhase: 1))
+        #expect(second == .scroll(deltaX: 0, deltaY: -75, momentumPhase: 2))
+        #expect(abs(model.velocityY - (-100 * Self.decay * Self.decay)) < 1e-9)
     }
 
-    @Test("兩軸都慢到門檻以下就結束，並要求補一筆結束事件")
+    @Test("送出的像素總和 = 0.8 × 速度總和，零頭不會丟掉")
+    func totalMatchesVelocityIntegral() {
+        var model = InertiaModel()
+        model.start(velocityX: 0, velocityY: 30)
+        let result = run(&model)
+
+        var velocity = 30.0
+        var expected = 0.0
+        while true {
+            velocity *= Double(Self.decay)
+            if velocity < 2 { break }
+            expected += velocity * 0.8
+        }
+        let total = result.pixels.reduce(0) { $0 + Int($1) }
+        #expect(abs(Double(total) - expected) < 1)
+        #expect(result.last == .finished(emitTerminal: true))
+    }
+
+    @Test("越滑越慢：每一格送出的像素不會比前一格多超過 1（平滑減速，沒有固定速度的尾巴）")
+    func deceleratesSmoothly() {
+        var model = InertiaModel()
+        model.start(velocityX: 0, velocityY: 30)
+        let pixels = run(&model).pixels
+
+        #expect(pixels.first == 23)                 // 30 × 0.9672 × 0.8
+        #expect((pixels.last ?? 99) <= 2)
+        for (previous, next) in zip(pixels, pixels.dropFirst()) {
+            #expect(next <= previous + 1)
+        }
+    }
+
+    @Test("兩軸都慢到門檻以下就結束")
     func finishesBelowMinimumVelocity() {
         var model = InertiaModel()
         model.start(velocityX: 30, velocityY: 0)
+        var result = run(&model)
 
-        var scrollCount = 0
-        var finished: InertiaModel.Tick?
-        for _ in 0..<1_000 {
-            let tick = model.tick()
-            if case .scroll = tick {
-                scrollCount += 1
-            } else {
-                finished = tick
-                break
-            }
-        }
-
-        // 30 × 0.9672ⁿ < 2 → n = 82。
-        #expect(scrollCount == 81)
-        #expect(finished == .finished(emitTerminal: true))
+        // 30 × 0.9672ⁿ < 2 → 第 82 格結束。
+        #expect(result.ticks == 82)
+        #expect(result.last == .finished(emitTerminal: true))
         #expect(!model.isScrolling)
-        do { let value = model.tick(); #expect(value == .idle) }
+        result.last = model.tick()
+        #expect(result.last == .idle)
     }
 
     @Test("一開始就低於門檻：直接結束，不用補結束事件")
     func belowThresholdFromTheStart() {
         var model = InertiaModel()
         model.start(velocityX: 1, velocityY: 1.5)
-        do { let value = model.tick(); #expect(value == .finished(emitTerminal: false)) }
+        let tick = model.tick()
+        #expect(tick == .finished(emitTerminal: false))
+    }
+
+    @Test("速度很低、這一格攢不到一個像素時不送事件")
+    func coastsWithoutEmittingBelowOnePixel() {
+        var model = InertiaModel()
+        model.minimumVelocity = 0.5
+        model.start(velocityX: 0, velocityY: 1)     // 每格約 0.77 px
+        let first = model.tick()
+        let second = model.tick()
+        #expect(first == .coasting)
+        #expect(second == .scroll(deltaX: 0, deltaY: 1, momentumPhase: 1))
     }
 
     @Test("中途喊停：送過事件才需要補結束事件")
     func stopReportsWhetherTerminalIsNeeded() {
         var model = InertiaModel()
         model.start(velocityX: 0, velocityY: 200)
-        do { let value = model.stop(); #expect(value == false) }
+        let beforeAnyTick = model.stop()
+        #expect(beforeAnyTick == false)
 
         model.start(velocityX: 0, velocityY: 200)
         _ = model.tick()
-        do { let value = model.stop(); #expect(value == true) }
+        let afterTick = model.stop()
+        #expect(afterTick == true)
         #expect(model.velocityY == 0)
     }
 
     @Test("非有限的速度不啟動；超大的速度夾在 Int32 範圍內")
     func rejectsNonFiniteAndClampsHugeVelocity() {
         var model = InertiaModel()
-        do { let value = model.start(velocityX: .nan, velocityY: 0); #expect(value == false) }
-        do { let value = model.start(velocityX: 0, velocityY: .infinity); #expect(value == false) }
+        let nan = model.start(velocityX: .nan, velocityY: 0)
+        let infinite = model.start(velocityX: 0, velocityY: .infinity)
+        #expect(nan == false)
+        #expect(infinite == false)
         #expect(!model.isScrolling)
 
-        do { let started = model.start(velocityX: 1e30, velocityY: -1e30); #expect(started) }
-        do { let value = model.tick(); #expect(value == .scroll(deltaX: .max, deltaY: .min, momentumPhase: 1)) }
+        let started = model.start(velocityX: 1e30, velocityY: -1e30)
+        #expect(started)
+        let tick = model.tick()
+        #expect(tick == .scroll(deltaX: .max, deltaY: .min, momentumPhase: 1))
     }
 
-    @Test("重新啟動會重新從 began 開始")
+    @Test("重新啟動會重新從 began 開始，零頭也歸零")
     func restartResetsPhase() {
         var model = InertiaModel()
         model.start(velocityX: 0, velocityY: 100)
         _ = model.tick()
         model.start(velocityX: 0, velocityY: 100)
-        guard case let .scroll(_, _, phase) = model.tick() else {
-            Issue.record("應該送出捲動")
-            return
-        }
-        #expect(phase == 1)
+        let tick = model.tick()
+        #expect(tick == .scroll(deltaX: 0, deltaY: 77, momentumPhase: 1))
     }
 }
 
