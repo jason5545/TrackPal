@@ -1,41 +1,27 @@
-// TrackPal/Views/Settings/SettingsView.swift
 import SwiftUI
+import TrackPalCore
+import TrackPalSystem
 
+/// 設定頁。每一列直接綁 `SettingsStore` 的屬性：寫入時 store 會存檔並把新設定
+/// 交給狀態機，這裡不需要另外同步。
 struct SettingsView: View {
-    @Binding var launchAtLogin: Bool
-    @Binding var edgeMode: TrackpadZoneScroller.VerticalEdgeMode
-    @Binding var horizontalPosition: TrackpadZoneScroller.HorizontalPosition
-    @Binding var edgeWidth: Double
-    @Binding var bottomHeight: Double
-    @Binding var sensitivity: Double
-    @Binding var accelerationCurve: TrackpadZoneScroller.AccelerationCurveType
-    @Binding var middleClickEnabled: Bool
-    @Binding var cornerTriggerEnabled: Bool
-    @Binding var cornerTriggerZoneSize: Double
-    @Binding var cornerActionTopLeft: TrackpadZoneScroller.CornerAction
-    @Binding var cornerActionTopRight: TrackpadZoneScroller.CornerAction
-    @Binding var cornerActionBottomLeft: TrackpadZoneScroller.CornerAction
-    @Binding var cornerActionBottomRight: TrackpadZoneScroller.CornerAction
+    @Bindable var settings: SettingsStore
+    let onQuit: () -> Void
+
+    private var accent: Color { DesignTokens.Colors.accentPrimary }
+
+    private func stateColor(_ isOn: Bool) -> Color {
+        isOn ? accent : DesignTokens.Colors.textSecondary
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-                // 一般
                 generalSection
-
-                // 捲動區域
                 scrollZoneSection
-
-                // 捲動行為
                 scrollBehaviorSection
-
-                // 中鍵點擊
                 middleClickSection
-
-                // 角落觸發
                 cornerTriggerSection
-
-                // Footer
                 footerSection
             }
             .padding(.horizontal, DesignTokens.Spacing.xs)
@@ -50,13 +36,10 @@ struct SettingsView: View {
 
             SettingsToggleRow(
                 icon: "power.circle",
-                iconColor: launchAtLogin ? DesignTokens.Colors.accentPrimary : DesignTokens.Colors.textSecondary,
+                iconColor: stateColor(settings.launchAtLogin),
                 title: "Launch at Login",
-                isOn: $launchAtLogin
+                isOn: $settings.launchAtLogin
             )
-            .onChange(of: launchAtLogin) { _, newValue in
-                Settings.shared.launchAtLogin = newValue
-            }
         }
     }
 
@@ -68,51 +51,35 @@ struct SettingsView: View {
 
             SettingsPickerRow(
                 icon: "arrow.up.arrow.down",
-                iconColor: DesignTokens.Colors.accentPrimary,
+                iconColor: accent,
                 title: "Vertical Scroll",
-                selection: $edgeMode,
+                selection: $settings.verticalEdgeMode,
                 pickerWidth: 150
             )
-            .onChange(of: edgeMode) { _, newValue in
-                Settings.shared.verticalEdgeMode = newValue
-                TrackpadZoneScroller.shared.verticalEdgeMode = newValue
-            }
 
             SettingsPickerRow(
                 icon: "arrow.left.arrow.right",
-                iconColor: DesignTokens.Colors.accentPrimary,
+                iconColor: accent,
                 title: "Horizontal Scroll",
-                selection: $horizontalPosition,
+                selection: $settings.horizontalPosition,
                 pickerWidth: 100
             )
-            .onChange(of: horizontalPosition) { _, newValue in
-                Settings.shared.horizontalPosition = newValue
-                TrackpadZoneScroller.shared.horizontalPosition = newValue
-            }
 
             SettingsSliderRow(
                 title: "Edge Width",
-                value: $edgeWidth,
+                value: $settings.edgeZoneWidth,
                 range: 0.05...0.30,
-                format: { "\(Int($0 * 100))%" },
+                format: Self.percent,
                 icon: "ruler"
             )
-            .onChange(of: edgeWidth) { _, newValue in
-                Settings.shared.edgeZoneWidth = CGFloat(newValue)
-                TrackpadZoneScroller.shared.edgeZoneWidth = CGFloat(newValue)
-            }
 
             SettingsSliderRow(
                 title: "Horizontal Height",
-                value: $bottomHeight,
+                value: $settings.bottomZoneHeight,
                 range: 0.10...0.40,
-                format: { "\(Int($0 * 100))%" },
+                format: Self.percent,
                 icon: "rectangle.bottomhalf.filled"
             )
-            .onChange(of: bottomHeight) { _, newValue in
-                Settings.shared.bottomZoneHeight = CGFloat(newValue)
-                TrackpadZoneScroller.shared.bottomZoneHeight = CGFloat(newValue)
-            }
         }
     }
 
@@ -124,27 +91,21 @@ struct SettingsView: View {
 
             SettingsSliderRow(
                 title: "Scroll Sensitivity",
-                value: $sensitivity,
+                value: $settings.scrollMultiplier,
                 range: 1.0...10.0,
                 format: { String(format: "%.1fx", $0) },
                 icon: "gauge.with.dots.needle.33percent"
             )
-            .onChange(of: sensitivity) { _, newValue in
-                Settings.shared.scrollMultiplier = CGFloat(newValue)
-                TrackpadZoneScroller.shared.scrollMultiplier = CGFloat(newValue)
-            }
 
             SettingsPickerRow(
                 icon: "chart.line.uptrend.xyaxis",
-                iconColor: DesignTokens.Colors.accentPrimary,
+                iconColor: accent,
                 title: "Acceleration Curve",
-                selection: $accelerationCurve,
-                pickerWidth: 140
+                selection: $settings.accelerationCurveType,
+                // 四個選項用一般大小會超出面板右緣，最後一個被切掉。
+                pickerWidth: 170,
+                controlSize: .small
             )
-            .onChange(of: accelerationCurve) { _, newValue in
-                Settings.shared.accelerationCurveType = newValue
-                TrackpadZoneScroller.shared.accelerationCurveType = newValue
-            }
         }
     }
 
@@ -156,14 +117,10 @@ struct SettingsView: View {
 
             SettingsToggleRow(
                 icon: "hand.tap",
-                iconColor: middleClickEnabled ? DesignTokens.Colors.accentPrimary : DesignTokens.Colors.textSecondary,
+                iconColor: stateColor(settings.middleClickEnabled),
                 title: "Enable Force Middle Click",
-                isOn: $middleClickEnabled
+                isOn: $settings.middleClickEnabled
             )
-            .onChange(of: middleClickEnabled) { _, newValue in
-                Settings.shared.middleClickEnabled = newValue
-                TrackpadZoneScroller.shared.middleClickEnabled = newValue
-            }
         }
     }
 
@@ -175,85 +132,65 @@ struct SettingsView: View {
 
             SettingsToggleRow(
                 icon: "rectangle.dashed.badge.record",
-                iconColor: cornerTriggerEnabled ? DesignTokens.Colors.accentPrimary : DesignTokens.Colors.textSecondary,
+                iconColor: stateColor(settings.cornerTriggerEnabled),
                 title: "Enable Force Corner Triggers",
-                isOn: $cornerTriggerEnabled
+                isOn: $settings.cornerTriggerEnabled
             )
-            .onChange(of: cornerTriggerEnabled) { _, newValue in
-                Settings.shared.cornerTriggerEnabled = newValue
-                TrackpadZoneScroller.shared.cornerTriggerEnabled = newValue
-            }
 
-            if cornerTriggerEnabled {
+            if settings.cornerTriggerEnabled {
                 SettingsSliderRow(
                     title: "Corner Zone Size",
-                    value: $cornerTriggerZoneSize,
+                    value: $settings.cornerTriggerZoneSize,
                     range: 0.05...0.25,
-                    format: { "\(Int($0 * 100))%" },
+                    format: Self.percent,
                     icon: "square.dashed"
                 )
-                .onChange(of: cornerTriggerZoneSize) { _, newValue in
-                    Settings.shared.cornerTriggerZoneSize = CGFloat(newValue)
-                    TrackpadZoneScroller.shared.cornerTriggerZoneSize = CGFloat(newValue)
-                }
 
-                cornerActionRow(title: "Top Left", icon: "arrow.up.left", selection: $cornerActionTopLeft) { newValue in
-                    Settings.shared.cornerActionTopLeft = newValue
-                    TrackpadZoneScroller.shared.cornerActions[.topLeftCorner] = newValue
-                }
-
-                cornerActionRow(title: "Top Right", icon: "arrow.up.right", selection: $cornerActionTopRight) { newValue in
-                    Settings.shared.cornerActionTopRight = newValue
-                    TrackpadZoneScroller.shared.cornerActions[.topRightCorner] = newValue
-                }
-
-                cornerActionRow(title: "Bottom Left", icon: "arrow.down.left", selection: $cornerActionBottomLeft) { newValue in
-                    Settings.shared.cornerActionBottomLeft = newValue
-                    TrackpadZoneScroller.shared.cornerActions[.bottomLeftCorner] = newValue
-                }
-
-                cornerActionRow(title: "Bottom Right", icon: "arrow.down.right", selection: $cornerActionBottomRight) { newValue in
-                    Settings.shared.cornerActionBottomRight = newValue
-                    TrackpadZoneScroller.shared.cornerActions[.bottomRightCorner] = newValue
-                }
+                cornerActionRow("Top Left", "arrow.up.left", $settings.cornerActionTopLeft)
+                cornerActionRow("Top Right", "arrow.up.right", $settings.cornerActionTopRight)
+                cornerActionRow("Bottom Left", "arrow.down.left", $settings.cornerActionBottomLeft)
+                cornerActionRow("Bottom Right", "arrow.down.right", $settings.cornerActionBottomRight)
             }
         }
     }
 
     private func cornerActionRow(
-        title: LocalizedStringKey,
-        icon: String,
-        selection: Binding<TrackpadZoneScroller.CornerAction>,
-        onChange: @escaping (TrackpadZoneScroller.CornerAction) -> Void
+        _ title: LocalizedStringKey,
+        _ icon: String,
+        _ selection: Binding<CornerAction>
     ) -> some View {
         SettingsPickerRow(
             icon: icon,
-            iconColor: DesignTokens.Colors.accentPrimary,
+            iconColor: accent,
             title: title,
             selection: selection,
             style: .menu,
             pickerWidth: 140
         )
-        .onChange(of: selection.wrappedValue) { _, newValue in
-            onChange(newValue)
-        }
     }
 
     // MARK: - Footer
 
     private var footerSection: some View {
         HStack {
-            Text("v1.1")
+            Text(verbatim: Self.versionLabel)
                 .font(DesignTokens.Typography.caption)
                 .foregroundStyle(DesignTokens.Colors.textTertiary)
 
             Spacer()
 
-            Button("Quit") {
-                NSApplication.shared.terminate(nil)
-            }
-            .glassButtonStyle()
+            Button("Quit", action: onQuit)
+                .glassButtonStyle()
         }
         .padding(.top, DesignTokens.Spacing.xs)
     }
+
+    private static let percent: (Double) -> String = { "\(Int($0 * 100))%" }
+
+    /// 版本號讀 bundle，跟 build 設定一致。
+    private static let versionLabel: String = {
+        let version = Bundle.main
+            .object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        return "v\(version ?? "?")"
+    }()
 }

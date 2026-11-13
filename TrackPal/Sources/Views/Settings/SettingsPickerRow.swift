@@ -13,6 +13,8 @@ struct SettingsPickerRow<T: Hashable & CaseIterable & RawRepresentable & Localiz
     @Binding var selection: T
     var style: PickerRowStyle = .segmented
     var pickerWidth: CGFloat = 150
+    /// 選項多到一般大小放不下時用 `.small`。
+    var controlSize: ControlSize = .regular
 
     var body: some View {
         SettingsRowView(
@@ -39,6 +41,7 @@ struct SettingsPickerRow<T: Hashable & CaseIterable & RawRepresentable & Localiz
                 }
             }
             .labelsHidden()
+            .controlSize(controlSize)
             .frame(width: pickerWidth)
         }
     }

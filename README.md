@@ -1,150 +1,133 @@
 # TrackPal
 
-macOS 選單列工具，讓觸控板支援**單指邊緣捲動**、**中鍵點擊**與**智慧觸控過濾**功能。
+macOS 選單列工具，給只能用一根手指操作觸控板的人：在觸控板邊緣滑動就能捲動，用力按就能送出中鍵、右鍵或系統動作，不需要任何多指手勢。
 
-## 功能特色
+## 功能
 
-### 核心捲動
+### 捲動
 
-- **單指垂直捲動** - 在觸控板左側或右側邊緣單指滑動即可上下捲動
-- **單指水平捲動** - 在觸控板上方或下方邊緣單指滑動即可左右捲動
-- **中鍵點擊** - 在中央區域用力按壓（Force Click）觸發滑鼠中鍵
-- **自然捲動** - 遵循 macOS 自然捲動方向
+- **單指垂直捲動**：在左側或右側邊緣上下滑（可選左、右或兩側）。
+- **單指水平捲動**：在下方或上方的長條左右滑。
+- **自然捲動方向**：跟 macOS 的兩指捲動一致。
+- **慣性**：放開時還在滑，內容會繼續滑行一小段再停。
+- **加速曲線**：線性、二次、三次、緩動。
 
-### 智慧捲動引擎
+### 用力按（Force Click）
 
-- **Force Click 動作** - 中鍵與角落觸發需要壓力訊號，普通點一下不會觸發
-- **速度自適應慣性** - 輕滑快速停止，用力滑動慣性持續更久
-- **子像素累加器** - 避免 Int32 截斷造成的微小移動死區
-- **寬高比補償** - 自動補償觸控板 ~1.6:1 寬高比，水平捲動與垂直一致
+- **中鍵**：在觸控板上緣（水平長條設在上方時是下緣）中間用力按。
+- **角落動作**：四個角落各自可以設成右鍵、Mission Control、應用程式視窗、顯示桌面、啟動台、通知中心。
 
-### 觸控過濾
+這些動作都要有壓力訊號才觸發，輕點一下不會誤觸；沒觸發時，原本的點擊照常送給 App。
 
-- **輕觸過濾** - 過濾手指懸浮或輕觸的誤觸（密度閾值）
-- **大面積過濾** - 過濾手掌或手腕的誤觸（橢圓軸閾值）
-- **多指手勢處理** - 單指↔多指轉換時自動取消捲動，避免與系統手勢衝突
-- **CGEventTap 攔截** - 區域捲動期間抑制系統重複捲動事件
+### 分辨「要捲動」還是「要移游標」
 
-### 其他功能
+邊緣區同時也是游標會經過的地方，所以每次接觸都先判斷意圖：
 
-- **角落觸發** - 點擊觸控板四個角落觸發系統動作（Mission Control、顯示桌面等）
-- **加速曲線** - 可選擇線性、二次、三次或緩動曲線調整捲動手感
-- **開機自動啟動** - 支援登入時自動啟動
+- **垂直邊緣與角落**：看累積的位移方向與連貫程度，至少兩筆有意義的位移才決定；單一幀的跳動不算。
+- **水平長條**：游標優先。判斷期間游標照常移動，確定是一段留在長條內的橫向直線滑動才開始捲，並把游標放回落指時的位置。往觸控板內側走、離開長條、游移太久，都交回游標。
+- **觸控過濾**：太輕的接觸（手指懸著）與太大的接觸（手掌、手腕）不算。
+- **多指**：放下第二根手指就取消，交給系統手勢；全部放開之後才重新開始。
 
 ## 系統需求
 
-- macOS 14.0 或更新版本
-- 需要**輔助功能權限**
+- macOS 14.0 以上
+- 有 Force Touch 的觸控板（沒有的話捲動照常可用，用力按的動作不能用）
+- **輔助功能權限**
 
 ## 安裝
 
-1. 下載 `TrackPal.app`
-2. 將應用程式移動到 `/Applications` 資料夾
-3. 啟動 TrackPal
-4. 依提示授予輔助功能權限：
-   - 系統設定 → 隱私權與安全性 → 輔助功能 → 允許 TrackPal
+1. 把 `TrackPal.app` 放到 `/Applications`。
+2. 啟動後依提示到「系統設定 → 隱私權與安全性 → 輔助功能」允許 TrackPal。
 
-## 使用方式
+權限跟 App 的路徑綁在一起，換位置要重新授權。
 
-啟動後，TrackPal 會在選單列顯示圖示。點擊圖示可開啟設定面板：
+## 設定
 
-### 設定選項
+點選單列的圖示開啟面板，右上角的齒輪進設定頁。
 
-| 設定 | 說明 | 預設值 |
-|------|------|--------|
-| 啟用區域捲動 | 開啟/關閉主要功能 | 開啟 |
-| 開機時自動啟動 | 登入時自動啟動 | 開啟 |
-| 上下捲動區域 | 垂直捲動使用的邊緣 | 右側 |
-| 水平捲動位置 | 水平捲動區域位置 | 下方 |
-| 啟用中鍵點擊 | 中央區域用力按壓觸發中鍵 | 開啟 |
-| 邊緣寬度 | 捲動區域佔觸控板比例 | 15% |
-| 水平區域高度 | 水平捲動區域高度 | 30% |
-| 捲動靈敏度 | 捲動速度倍率 | 3.0x |
-| 捲動加速曲線 | 捲動加速方式 | 線性 |
-| 啟用角落觸發 | 開啟/關閉角落用力按壓觸發 | 關閉 |
-| 角落區域大小 | 角落觸發區域大小 | 15% |
-| 過濾輕觸 | 過濾懸浮/輕觸的誤觸 | 開啟 |
-| 過濾大面積觸控 | 過濾手掌/手腕的誤觸 | 開啟 |
+| 設定 | 說明 | 預設值 | 範圍 |
+|------|------|--------|------|
+| 啟用區域捲動 | 總開關 | 開 | |
+| 開機時自動啟動 | 登入後自動執行 | 開 | |
+| 上下捲動 | 垂直捲動用哪一側 | 右側 | 左側／右側／雙側 |
+| 水平捲動 | 水平長條在哪一邊 | 下方 | 下方／上方 |
+| 邊緣寬度 | 垂直邊緣佔觸控板寬度 | 15% | 5–30% |
+| 水平高度 | 水平長條佔觸控板高度 | 30% | 10–40% |
+| 捲動靈敏度 | 位移換算成捲動量的倍率 | 3.0x | 1.0–10.0x |
+| 加速曲線 | 位移到捲動量的曲線 | 線性 | 線性／二次／三次／緩動 |
+| 啟用用力按壓中鍵 | 中鍵區用力按送出中鍵 | 開 | |
+| 啟用用力按壓角落 | 角落的壓力動作 | 關 | |
+| 角落區域大小 | 角落佔觸控板的比例 | 15% | 5–25% |
+| 四個角落的動作 | 各自的壓力動作 | 右下角是右鍵，其餘無 | |
 
-### 慣性行為
+輕觸與大面積過濾預設開啟，門檻沒有放在介面上，要改用 `defaults write com.jasonchien.TrackPal <key> <值>`：
+`filterLightTouches`、`filterLargeTouches`、`lightTouchDensityThreshold`（0.02）、`largeTouchMajorAxisThreshold`（15）、`largeTouchMinorAxisThreshold`（12）。
 
-| 滑動力道 | 行為 |
-|----------|------|
-| 無/極輕（速度 < 50） | 跟隨手指，抬起即停 |
-| 輕滑（50-120） | 短暫慣性，快速停止 |
-| 正常滑動（120-250） | 標準慣性 |
-| 用力滑動（> 250） | 完整慣性，持續較久 |
-
-### 角落觸發動作
-
-啟用角落觸發後，可為四個角落分別設定動作：
-
-| 動作 | 說明 |
-|------|------|
-| 無動作 | 不執行任何操作 |
-| Mission Control | 顯示所有視窗與桌面 |
-| 應用程式視窗 | 顯示目前應用程式的所有視窗 |
-| 顯示桌面 | 隱藏所有視窗顯示桌面 |
-| 啟動台 | 開啟 Launchpad |
-| 通知中心 | 開啟通知中心 |
-
-### 加速曲線類型
-
-| 曲線 | 說明 |
-|------|------|
-| 線性 | 1:1 直接對應，適合精確控制 |
-| 二次 | 小幅滑動較緩，大幅滑動加速 |
-| 三次 | 更強的加速效果 |
-| 緩動 | 平滑過渡，適合一般使用 |
-
-## 技術架構
+## 架構
 
 ```
-TrackPal/Sources/
-├── TrackPalApp.swift             # App 入口、AppDelegate、Settings 管理
-├── TrackpadZoneScroller.swift    # 核心：區域偵測、觸控過濾、意圖預測、事件攔截
-├── InertiaScroller.swift         # CVDisplayLink 慣性引擎（速度自適應摩擦力）
-├── LogManager.swift              # 檔案日誌系統 (~/Library/Logs/TrackPal.log)
-├── MultitouchSupport.h           # Private framework 宣告
-├── TrackPal-Bridging-Header.h
-└── Views/
-    ├── MenuBarPopupView.swift    # 設定面板 UI
-    ├── DesignSystem/
-    │   ├── DesignTokens.swift    # 色彩、字型、間距常數
-    │   └── VisualEffectBackground.swift
-    └── Components/
-        ├── TrackpadDiagramView.swift     # 觸控板區域視覺化
-        └── SettingsSliderRow.swift       # 滑桿元件
+TrackPal/                     App：選單列介面、裝置註冊
+├── Sources/App/              進入點、AppRuntime（把各元件接起來）、在地化
+├── Sources/Multitouch/       MultitouchSupport（私有 framework）的 callback
+├── Sources/Views/            SwiftUI 介面
+└── Resources/
+
+TrackPalKit/                  Swift package
+├── Sources/TrackPalCore/     純邏輯，不碰系統 API
+│   ├── Engine/               手勢狀態機（ZoneScrollEngine）
+│   ├── Gates/                各種意圖判斷
+│   ├── Input/                裝置仲裁、callback 排序、壓力樣本緩衝
+│   ├── Output/               慣性模型、捲動數值換算
+│   └── Replay/               軌跡檔格式、重播、隨機情境產生器
+├── Sources/TrackPalSystem/   macOS 整合：合成 CGEvent、event tap、
+│                             display link、日誌、軌跡檔、設定儲存
+├── Sources/trackpal-replay/  用實機軌跡重算的命令列工具
+└── Tests/
 ```
 
-### 關鍵技術
+狀態機不直接送事件、不讀時鐘、不寫檔，全部經過 `ZoneScrollEffects` 介面。App 接上真正的實作，測試與重算工具接上只記錄的實作，所以整條手勢流程（從觸控幀到送出的捲動、點擊）可以離線重播，同一段輸入一定得到同一串輸出。
 
-- **MultitouchSupport.framework** - Apple 私有框架，取得原始觸控板資料
-- **CGEventTap** - 系統層級事件攔截，避免捲動事件衝突
-- **CVDisplayLink** - 畫面同步的慣性捲動更新
-- **os_unfair_lock** - 執行緒安全的跨 callback 狀態同步
+用到的系統介面：
 
-## 建置
+- **MultitouchSupport.framework**（私有）：原始觸控幀與壓力。
+- **CGEventTap**：區域捲動期間擋掉系統自己的捲動與游標移動；攔下可能要改成壓力動作的原生點擊。
+- **CADisplayLink**：慣性。
+
+## 開發
 
 ```bash
-# Debug 建置
-xcodebuild -project TrackPal.xcodeproj -scheme TrackPal -configuration Debug build
+# 測試（判斷邏輯與系統整合層，幾秒跑完，不用開 App）
+swift test --package-path TrackPalKit
 
-# Release 建置
+# 建置 App
 xcodebuild -project TrackPal.xcodeproj -scheme TrackPal -configuration Release build
-
-# 部署到系統應用程式
-cp -R ~/Library/Developer/Xcode/DerivedData/TrackPal-*/Build/Products/Release/TrackPal.app /Applications/
 ```
 
-## 診斷日誌
+`xcodebuild … test` 也會跑同一批測試。
 
-TrackPal 會寫入日誌到 `~/Library/Logs/TrackPal.log`，可用於除錯：
+### 日誌與軌跡
+
+- `~/Library/Logs/TrackPal.log`：每次接觸一筆總結，加上判斷過程的關鍵訊息。16 MB 輪替一次，保留上一份。
+- `~/Library/Logs/TrackPal.traces.jsonl`：從捲動區、角落、中鍵區起步的接觸逐幀軌跡，一次接觸一行。只有觸控板上的座標與接觸面積，沒有游標位置、視窗或按鍵。8 MB 輪替一次。
+
+### 改門檻之前先重算
 
 ```bash
-# 即時查看日誌
-tail -f ~/Library/Logs/TrackPal.log
+cd TrackPalKit
+
+# 水平長條：當時的結果 → 用目前規則重算的結果
+swift run -c release trackpal-replay --summary
+
+# 帶門檻試算
+swift run -c release trackpal-replay D=0.04 slope=0.3 --summary
+
+# 整個狀態機重播所有區域
+swift run -c release trackpal-replay engine --summary
+
+swift run -c release trackpal-replay --help
 ```
+
+重算用的是 App 裡跑的同一份程式碼。
 
 ## 授權
 

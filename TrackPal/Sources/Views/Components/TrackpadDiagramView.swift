@@ -1,20 +1,21 @@
 // TrackPal/Views/Components/TrackpadDiagramView.swift
 import SwiftUI
+import TrackPalCore
 
 /// Visual diagram showing trackpad zones
 struct TrackpadDiagramView: View {
     let edgeWidth: CGFloat
     let bottomHeight: CGFloat
-    let edgeMode: TrackpadZoneScroller.VerticalEdgeMode
-    let horizontalPosition: TrackpadZoneScroller.HorizontalPosition
+    let edgeMode: VerticalEdgeMode
+    let horizontalPosition: HorizontalPosition
     let middleClickEnabled: Bool
     let cornerTriggerEnabled: Bool
     let cornerTriggerZoneSize: CGFloat
 
     init(edgeWidth: CGFloat,
          bottomHeight: CGFloat,
-         edgeMode: TrackpadZoneScroller.VerticalEdgeMode,
-         horizontalPosition: TrackpadZoneScroller.HorizontalPosition,
+         edgeMode: VerticalEdgeMode,
+         horizontalPosition: HorizontalPosition,
          middleClickEnabled: Bool,
          cornerTriggerEnabled: Bool = false,
          cornerTriggerZoneSize: CGFloat = 0.15) {
@@ -35,8 +36,9 @@ struct TrackpadDiagramView: View {
         edgeMode == .right || edgeMode == .both
     }
 
-    private let middleClickZoneWidth: CGFloat = 0.30
-    private let middleClickZoneHeight: CGFloat = 0.15
+    // 中鍵區的大小跟狀態機用同一份預設值。
+    private let middleClickZoneWidth = ZoneScrollConfiguration().middleClickZoneWidth
+    private let middleClickZoneHeight = ZoneScrollConfiguration().middleClickZoneHeight
 
     var body: some View {
         GeometryReader { geometry in
@@ -47,7 +49,7 @@ struct TrackpadDiagramView: View {
             let middleClickWidth = width * middleClickZoneWidth
             let middleClickHeight = height * middleClickZoneHeight
             let cornerSize = min(width, height) * cornerTriggerZoneSize
-            let expandedCornerDepth = height * (1.0 - CornerActivationZone.defaultFarEdgeBoundary)
+            let expandedCornerDepth = height * ZoneScrollConfiguration.expandedCornerBandDepth
 
             ZStack {
                 // Trackpad outline

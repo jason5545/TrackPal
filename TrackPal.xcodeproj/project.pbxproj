@@ -3,107 +3,48 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 56;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A1000003232F0003 /* InertiaScroller.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000013232F0003 /* InertiaScroller.swift */; };
-		A1000006232F0006 /* LogManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000016232F0006 /* LogManager.swift */; };
-		A1000008232F0008 /* TrackpadZoneScroller.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000018232F0008 /* TrackpadZoneScroller.swift */; };
-		A2000001232F0101 /* ForcePressActionGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000011232F0111 /* ForcePressActionGate.swift */; };
-		A2000002232F0102 /* ForcePressActionGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000011232F0111 /* ForcePressActionGate.swift */; };
-		A2000003232F0103 /* ForcePressActionGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000012232F0112 /* ForcePressActionGateTests.swift */; };
-		A2000004232F0104 /* PrimaryClickSuppressionGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000013232F0113 /* PrimaryClickSuppressionGate.swift */; };
-		A2000005232F0105 /* PrimaryClickSuppressionGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000013232F0113 /* PrimaryClickSuppressionGate.swift */; };
-		A2000006232F0106 /* PrimaryClickSuppressionGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000014232F0114 /* PrimaryClickSuppressionGateTests.swift */; };
-		A2000007232F0107 /* CornerActivationZone.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000015232F0115 /* CornerActivationZone.swift */; };
-		A2000008232F0108 /* CornerActivationZone.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000015232F0115 /* CornerActivationZone.swift */; };
-		A2000009232F0109 /* CornerActivationZoneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000016232F0116 /* CornerActivationZoneTests.swift */; };
-		A3000001232F0201 /* ScrollIntentGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000011232F0211 /* ScrollIntentGate.swift */; };
-		A3000002232F0202 /* ScrollIntentGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000011232F0211 /* ScrollIntentGate.swift */; };
-		A3000003232F0203 /* ScrollIntentGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000012232F0212 /* ScrollIntentGateTests.swift */; };
-		A7000001232F0601 /* HorizontalStripIntentGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7000011232F0611 /* HorizontalStripIntentGate.swift */; };
-		A7000002232F0602 /* HorizontalStripIntentGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7000011232F0611 /* HorizontalStripIntentGate.swift */; };
-		A7000003232F0603 /* HorizontalStripIntentGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7000012232F0612 /* HorizontalStripIntentGateTests.swift */; };
-		A7000004232F0604 /* GestureTraceRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7000013232F0613 /* GestureTraceRecorder.swift */; };
-		A4000001232F0301 /* TouchDeviceArbitrationGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4000011232F0311 /* TouchDeviceArbitrationGate.swift */; };
-		A4000002232F0302 /* TouchDeviceArbitrationGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4000011232F0311 /* TouchDeviceArbitrationGate.swift */; };
-		A4000003232F0303 /* TouchDeviceArbitrationGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4000012232F0312 /* TouchDeviceArbitrationGateTests.swift */; };
-		A5000001232F0401 /* DeviceCallbackContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000011232F0411 /* DeviceCallbackContext.swift */; };
-		A5000002232F0402 /* DeviceCallbackContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000011232F0411 /* DeviceCallbackContext.swift */; };
-		A6000001232F0501 /* TouchCallbackSequencer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6000011232F0511 /* TouchCallbackSequencer.swift */; };
-		A6000002232F0502 /* TouchCallbackSequencer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6000011232F0511 /* TouchCallbackSequencer.swift */; };
-		A6000003232F0503 /* TouchCallbackSequencerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6000012232F0512 /* TouchCallbackSequencerTests.swift */; };
-		A10000B0232F00B0 /* TrackPalApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A0232F00A0 /* TrackPalApp.swift */; };
-		A10000B1232F00B1 /* MenuBarPopupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A1232F00A1 /* MenuBarPopupView.swift */; };
-		A10000B2232F00B2 /* DesignTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A2232F00A2 /* DesignTokens.swift */; };
-		A10000B3232F00B3 /* VisualEffectBackground.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A3232F00A3 /* VisualEffectBackground.swift */; };
-		A10000B4232F00B4 /* TrackpadDiagramView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A4232F00A4 /* TrackpadDiagramView.swift */; };
-		A10000B5232F00B5 /* SettingsSliderRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A5232F00A5 /* SettingsSliderRow.swift */; };
-		A10000B6232F00B6 /* SectionHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A6232F00A6 /* SectionHeader.swift */; };
-		A10000B7232F00B7 /* SettingsRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A7232F00A7 /* SettingsRowView.swift */; };
-		A10000B8232F00B8 /* SettingsToggleRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A8232F00A8 /* SettingsToggleRow.swift */; };
-		A10000B9232F00B9 /* SettingsPickerRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000A9232F00A9 /* SettingsPickerRow.swift */; };
-		A10000BA232F00BA /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000AA232F00AA /* SettingsView.swift */; };
-		A10000D0232F00D0 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000D1232F00D1 /* Assets.xcassets */; };
-		A10000BB232F00BB /* LocalizedNameProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000AB232F00AB /* LocalizedNameProvider.swift */; };
-		A10000BC232F00BC /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = A10000AC232F00AC /* Localizable.xcstrings */; };
+		A1000100232F0100 /* TrackPalCore in Frameworks */ = {isa = PBXBuildFile; productRef = A1000110232F0110 /* TrackPalCore */; };
+		A1000101232F0101 /* TrackPalSystem in Frameworks */ = {isa = PBXBuildFile; productRef = A1000111232F0111 /* TrackPalSystem */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		A1000013232F0003 /* InertiaScroller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InertiaScroller.swift; sourceTree = "<group>"; };
-		A1000016232F0006 /* LogManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogManager.swift; sourceTree = "<group>"; };
-		A1000018232F0008 /* TrackpadZoneScroller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackpadZoneScroller.swift; sourceTree = "<group>"; };
-		A1000019232F0009 /* MultitouchSupport.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MultitouchSupport.h; sourceTree = "<group>"; };
-		A100001A232F000A /* TrackPal-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TrackPal-Bridging-Header.h"; sourceTree = "<group>"; };
-		A1000021232F0010 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		A1000022232F0011 /* TrackPal.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TrackPal.entitlements; sourceTree = "<group>"; };
 		A1000030232F0020 /* TrackPal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TrackPal.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		A2000030232F0120 /* TrackPalTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TrackPalTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		A10000A0232F00A0 /* TrackPalApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackPalApp.swift; sourceTree = "<group>"; };
-		A10000A1232F00A1 /* MenuBarPopupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarPopupView.swift; sourceTree = "<group>"; };
-		A10000A2232F00A2 /* DesignTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignTokens.swift; sourceTree = "<group>"; };
-		A10000A3232F00A3 /* VisualEffectBackground.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualEffectBackground.swift; sourceTree = "<group>"; };
-		A10000A4232F00A4 /* TrackpadDiagramView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackpadDiagramView.swift; sourceTree = "<group>"; };
-		A10000A5232F00A5 /* SettingsSliderRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsSliderRow.swift; sourceTree = "<group>"; };
-		A10000A6232F00A6 /* SectionHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SectionHeader.swift; sourceTree = "<group>"; };
-		A10000A7232F00A7 /* SettingsRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRowView.swift; sourceTree = "<group>"; };
-		A10000A8232F00A8 /* SettingsToggleRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsToggleRow.swift; sourceTree = "<group>"; };
-		A10000A9232F00A9 /* SettingsPickerRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsPickerRow.swift; sourceTree = "<group>"; };
-		A10000AA232F00AA /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
-		A10000D1232F00D1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		A10000AB232F00AB /* LocalizedNameProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalizedNameProvider.swift; sourceTree = "<group>"; };
-		A10000AC232F00AC /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
-		A2000011232F0111 /* ForcePressActionGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForcePressActionGate.swift; sourceTree = "<group>"; };
-		A2000012232F0112 /* ForcePressActionGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForcePressActionGateTests.swift; sourceTree = "<group>"; };
-		A2000013232F0113 /* PrimaryClickSuppressionGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrimaryClickSuppressionGate.swift; sourceTree = "<group>"; };
-		A2000014232F0114 /* PrimaryClickSuppressionGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrimaryClickSuppressionGateTests.swift; sourceTree = "<group>"; };
-		A2000015232F0115 /* CornerActivationZone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CornerActivationZone.swift; sourceTree = "<group>"; };
-		A2000016232F0116 /* CornerActivationZoneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CornerActivationZoneTests.swift; sourceTree = "<group>"; };
-		A3000011232F0211 /* ScrollIntentGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScrollIntentGate.swift; sourceTree = "<group>"; };
-		A3000012232F0212 /* ScrollIntentGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScrollIntentGateTests.swift; sourceTree = "<group>"; };
-		A7000011232F0611 /* HorizontalStripIntentGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HorizontalStripIntentGate.swift; sourceTree = "<group>"; };
-		A7000012232F0612 /* HorizontalStripIntentGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HorizontalStripIntentGateTests.swift; sourceTree = "<group>"; };
-		A7000013232F0613 /* GestureTraceRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GestureTraceRecorder.swift; sourceTree = "<group>"; };
-		A4000011232F0311 /* TouchDeviceArbitrationGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchDeviceArbitrationGate.swift; sourceTree = "<group>"; };
-		A4000012232F0312 /* TouchDeviceArbitrationGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchDeviceArbitrationGateTests.swift; sourceTree = "<group>"; };
-		A5000011232F0411 /* DeviceCallbackContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCallbackContext.swift; sourceTree = "<group>"; };
-		A6000011232F0511 /* TouchCallbackSequencer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchCallbackSequencer.swift; sourceTree = "<group>"; };
-		A6000012232F0512 /* TouchCallbackSequencerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchCallbackSequencerTests.swift; sourceTree = "<group>"; };
+		A1000150232F0150 /* TrackPalKit */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = TrackPalKit; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		A1000120232F0120 /* Exceptions for "TrackPal" folder in "TrackPal" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Resources/Info.plist,
+				Resources/TrackPal.entitlements,
+			);
+			target = A1000060232F0050 /* TrackPal */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		A1000130232F0130 /* TrackPal */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				A1000120232F0120 /* Exceptions for "TrackPal" folder in "TrackPal" target */,
+			);
+			path = TrackPal;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		A1000040232F0030 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		A2000040232F0130 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
+				A1000100232F0100 /* TrackPalCore in Frameworks */,
+				A1000101232F0101 /* TrackPalSystem in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -113,118 +54,18 @@
 		A1000050232F0040 = {
 			isa = PBXGroup;
 			children = (
-				A1000051232F0041 /* TrackPal */,
-				A2000050232F0140 /* TrackPalTests */,
+				A1000130232F0130 /* TrackPal */,
+				A1000150232F0150 /* TrackPalKit */,
 				A1000052232F0042 /* Products */,
 			);
-			sourceTree = "<group>";
-		};
-		A1000051232F0041 /* TrackPal */ = {
-			isa = PBXGroup;
-			children = (
-				A1000053232F0043 /* Sources */,
-				A1000054232F0044 /* Resources */,
-			);
-			path = TrackPal;
 			sourceTree = "<group>";
 		};
 		A1000052232F0042 /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				A1000030232F0020 /* TrackPal.app */,
-				A2000030232F0120 /* TrackPalTests.xctest */,
 			);
 			name = Products;
-			sourceTree = "<group>";
-		};
-		A1000053232F0043 /* Sources */ = {
-			isa = PBXGroup;
-			children = (
-				A10000A0232F00A0 /* TrackPalApp.swift */,
-				A1000013232F0003 /* InertiaScroller.swift */,
-				A1000016232F0006 /* LogManager.swift */,
-				A2000011232F0111 /* ForcePressActionGate.swift */,
-				A2000013232F0113 /* PrimaryClickSuppressionGate.swift */,
-				A2000015232F0115 /* CornerActivationZone.swift */,
-				A3000011232F0211 /* ScrollIntentGate.swift */,
-				A7000011232F0611 /* HorizontalStripIntentGate.swift */,
-				A7000013232F0613 /* GestureTraceRecorder.swift */,
-				A4000011232F0311 /* TouchDeviceArbitrationGate.swift */,
-				A5000011232F0411 /* DeviceCallbackContext.swift */,
-				A6000011232F0511 /* TouchCallbackSequencer.swift */,
-				A1000018232F0008 /* TrackpadZoneScroller.swift */,
-				A10000AB232F00AB /* LocalizedNameProvider.swift */,
-				A10000AC232F00AC /* Localizable.xcstrings */,
-				A1000019232F0009 /* MultitouchSupport.h */,
-				A100001A232F000A /* TrackPal-Bridging-Header.h */,
-				A10000C0232F00C0 /* Views */,
-			);
-			path = Sources;
-			sourceTree = "<group>";
-		};
-		A1000054232F0044 /* Resources */ = {
-			isa = PBXGroup;
-			children = (
-				A10000D1232F00D1 /* Assets.xcassets */,
-				A1000021232F0010 /* Info.plist */,
-				A1000022232F0011 /* TrackPal.entitlements */,
-			);
-			path = Resources;
-			sourceTree = "<group>";
-		};
-		A10000C0232F00C0 /* Views */ = {
-			isa = PBXGroup;
-			children = (
-				A10000A1232F00A1 /* MenuBarPopupView.swift */,
-				A10000C1232F00C1 /* DesignSystem */,
-				A10000C2232F00C2 /* Components */,
-				A10000C3232F00C3 /* Settings */,
-			);
-			path = Views;
-			sourceTree = "<group>";
-		};
-		A10000C1232F00C1 /* DesignSystem */ = {
-			isa = PBXGroup;
-			children = (
-				A10000A2232F00A2 /* DesignTokens.swift */,
-				A10000A3232F00A3 /* VisualEffectBackground.swift */,
-			);
-			path = DesignSystem;
-			sourceTree = "<group>";
-		};
-		A10000C2232F00C2 /* Components */ = {
-			isa = PBXGroup;
-			children = (
-				A10000A4232F00A4 /* TrackpadDiagramView.swift */,
-				A10000A5232F00A5 /* SettingsSliderRow.swift */,
-				A10000A6232F00A6 /* SectionHeader.swift */,
-			);
-			path = Components;
-			sourceTree = "<group>";
-		};
-		A10000C3232F00C3 /* Settings */ = {
-			isa = PBXGroup;
-			children = (
-				A10000A7232F00A7 /* SettingsRowView.swift */,
-				A10000A8232F00A8 /* SettingsToggleRow.swift */,
-				A10000A9232F00A9 /* SettingsPickerRow.swift */,
-				A10000AA232F00AA /* SettingsView.swift */,
-			);
-			path = Settings;
-			sourceTree = "<group>";
-		};
-		A2000050232F0140 /* TrackPalTests */ = {
-			isa = PBXGroup;
-			children = (
-				A2000012232F0112 /* ForcePressActionGateTests.swift */,
-				A2000014232F0114 /* PrimaryClickSuppressionGateTests.swift */,
-				A2000016232F0116 /* CornerActivationZoneTests.swift */,
-				A3000012232F0212 /* ScrollIntentGateTests.swift */,
-				A7000012232F0612 /* HorizontalStripIntentGateTests.swift */,
-				A4000012232F0312 /* TouchDeviceArbitrationGateTests.swift */,
-				A6000012232F0512 /* TouchCallbackSequencerTests.swift */,
-			);
-			path = TrackPalTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -242,26 +83,17 @@
 			);
 			dependencies = (
 			);
+			fileSystemSynchronizedGroups = (
+				A1000130232F0130 /* TrackPal */,
+			);
 			name = TrackPal;
+			packageProductDependencies = (
+				A1000110232F0110 /* TrackPalCore */,
+				A1000111232F0111 /* TrackPalSystem */,
+			);
 			productName = TrackPal;
 			productReference = A1000030232F0020 /* TrackPal.app */;
 			productType = "com.apple.product-type.application";
-		};
-		A2000060232F0150 /* TrackPalTests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = A2000070232F0160 /* Build configuration list for PBXNativeTarget "TrackPalTests" */;
-			buildPhases = (
-				A2000061232F0151 /* Sources */,
-				A2000040232F0130 /* Frameworks */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			name = TrackPalTests;
-			productName = TrackPalTests;
-			productReference = A2000030232F0120 /* TrackPalTests.xctest */;
-			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -270,19 +102,15 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 1500;
-				LastUpgradeCheck = 1500;
+				LastSwiftUpdateCheck = 2700;
+				LastUpgradeCheck = 2700;
 				TargetAttributes = {
 					A1000060232F0050 = {
-						CreatedOnToolsVersion = 15.0;
-					};
-					A2000060232F0150 = {
 						CreatedOnToolsVersion = 15.0;
 					};
 				};
 			};
 			buildConfigurationList = A1000081232F0071 /* Build configuration list for PBXProject "TrackPal" */;
-			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -291,12 +119,16 @@
 				"zh-Hant",
 			);
 			mainGroup = A1000050232F0040;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A1000140232F0140 /* XCLocalSwiftPackageReference "TrackPalKit" */,
+			);
+			preferredProjectObjectVersion = 77;
 			productRefGroup = A1000052232F0042 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				A1000060232F0050 /* TrackPal */,
-				A2000060232F0150 /* TrackPalTests */,
 			);
 		};
 /* End PBXProject section */
@@ -306,8 +138,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A10000D0232F00D0 /* Assets.xcassets in Resources */,
-				A10000BC232F00BC /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -318,52 +148,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A10000B0232F00B0 /* TrackPalApp.swift in Sources */,
-				A1000003232F0003 /* InertiaScroller.swift in Sources */,
-				A1000006232F0006 /* LogManager.swift in Sources */,
-				A2000001232F0101 /* ForcePressActionGate.swift in Sources */,
-				A2000004232F0104 /* PrimaryClickSuppressionGate.swift in Sources */,
-				A2000007232F0107 /* CornerActivationZone.swift in Sources */,
-				A3000001232F0201 /* ScrollIntentGate.swift in Sources */,
-				A7000001232F0601 /* HorizontalStripIntentGate.swift in Sources */,
-				A7000004232F0604 /* GestureTraceRecorder.swift in Sources */,
-				A4000001232F0301 /* TouchDeviceArbitrationGate.swift in Sources */,
-				A5000001232F0401 /* DeviceCallbackContext.swift in Sources */,
-				A6000001232F0501 /* TouchCallbackSequencer.swift in Sources */,
-				A1000008232F0008 /* TrackpadZoneScroller.swift in Sources */,
-				A10000B1232F00B1 /* MenuBarPopupView.swift in Sources */,
-				A10000B2232F00B2 /* DesignTokens.swift in Sources */,
-				A10000B3232F00B3 /* VisualEffectBackground.swift in Sources */,
-				A10000B4232F00B4 /* TrackpadDiagramView.swift in Sources */,
-				A10000B5232F00B5 /* SettingsSliderRow.swift in Sources */,
-				A10000B6232F00B6 /* SectionHeader.swift in Sources */,
-				A10000B7232F00B7 /* SettingsRowView.swift in Sources */,
-				A10000B8232F00B8 /* SettingsToggleRow.swift in Sources */,
-				A10000B9232F00B9 /* SettingsPickerRow.swift in Sources */,
-				A10000BA232F00BA /* SettingsView.swift in Sources */,
-				A10000BB232F00BB /* LocalizedNameProvider.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		A2000061232F0151 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				A2000002232F0102 /* ForcePressActionGate.swift in Sources */,
-				A2000005232F0105 /* PrimaryClickSuppressionGate.swift in Sources */,
-				A2000008232F0108 /* CornerActivationZone.swift in Sources */,
-				A3000002232F0202 /* ScrollIntentGate.swift in Sources */,
-				A7000002232F0602 /* HorizontalStripIntentGate.swift in Sources */,
-				A4000002232F0302 /* TouchDeviceArbitrationGate.swift in Sources */,
-				A5000002232F0402 /* DeviceCallbackContext.swift in Sources */,
-				A6000002232F0502 /* TouchCallbackSequencer.swift in Sources */,
-				A2000003232F0103 /* ForcePressActionGateTests.swift in Sources */,
-				A2000006232F0106 /* PrimaryClickSuppressionGateTests.swift in Sources */,
-				A2000009232F0109 /* CornerActivationZoneTests.swift in Sources */,
-				A3000003232F0203 /* ScrollIntentGateTests.swift in Sources */,
-				A7000003232F0603 /* HorizontalStripIntentGateTests.swift in Sources */,
-				A4000003232F0303 /* TouchDeviceArbitrationGateTests.swift in Sources */,
-				A6000003232F0503 /* TouchCallbackSequencerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -404,18 +188,11 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEAD_CODE_STRIPPING = YES;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
-				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
-				GCC_OPTIMIZATION_LEVEL = 0;
-				GCC_PREPROCESSOR_DEFINITIONS = (
-					"DEBUG=1",
-					"$(inherited)",
-				);
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
 				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
 				GCC_WARN_UNDECLARED_SELECTOR = YES;
@@ -424,10 +201,18 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
-				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = macosx;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -467,8 +252,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				ENABLE_NS_ASSERTIONS = NO;
+				DEAD_CODE_STRIPPING = YES;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
@@ -481,9 +265,11 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = macosx;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				MTL_ENABLE_DEBUG_INFO = NO;
 				SWIFT_COMPILATION_MODE = wholemodule;
 			};
 			name = Release;
@@ -492,31 +278,38 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = TrackPal/Resources/TrackPal.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
-				CODE_SIGN_ENTITLEMENTS = TrackPal/Resources/TrackPal.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = MW4GWYGX56;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TrackPal/Resources/Info.plist;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright 2025 Jason Chien. All rights reserved.";
-				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 2.0;
+				OTHER_LDFLAGS = (
+					"-F/System/Library/PrivateFrameworks",
+					"-framework",
+					MultitouchSupport,
+				);
+				OTHER_SWIFT_FLAGS = (
+					"$(inherited)",
+					"-enable-upcoming-feature",
+					ExistentialAny,
+					"-enable-upcoming-feature",
+					MemberImportVisibility,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.jasonchien.TrackPal;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "TrackPal/Sources/TrackPal-Bridging-Header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "TrackPal/Sources/Multitouch/TrackPal-Bridging-Header.h";
 				SWIFT_VERSION = 6.0;
-				OTHER_LDFLAGS = "-F/System/Library/PrivateFrameworks -framework MultitouchSupport";
 			};
 			name = Debug;
 		};
@@ -524,71 +317,38 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = TrackPal/Resources/TrackPal.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
-				CODE_SIGN_ENTITLEMENTS = TrackPal/Resources/TrackPal.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = MW4GWYGX56;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TrackPal/Resources/Info.plist;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright 2025 Jason Chien. All rights reserved.";
-				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 2.0;
+				OTHER_LDFLAGS = (
+					"-F/System/Library/PrivateFrameworks",
+					"-framework",
+					MultitouchSupport,
+				);
+				OTHER_SWIFT_FLAGS = (
+					"$(inherited)",
+					"-enable-upcoming-feature",
+					ExistentialAny,
+					"-enable-upcoming-feature",
+					MemberImportVisibility,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.jasonchien.TrackPal;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "TrackPal/Sources/TrackPal-Bridging-Header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "TrackPal/Sources/Multitouch/TrackPal-Bridging-Header.h";
 				SWIFT_VERSION = 6.0;
-				OTHER_LDFLAGS = "-F/System/Library/PrivateFrameworks -framework MultitouchSupport";
-			};
-			name = Release;
-		};
-		A2000092232F0182 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = MW4GWYGX56;
-				GENERATE_INFOPLIST_FILE = YES;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@loader_path/../Frameworks",
-					"@executable_path/../Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.jasonchien.TrackPalTests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_VERSION = 6.0;
-				WRAPPER_EXTENSION = xctest;
-			};
-			name = Debug;
-		};
-		A2000093232F0183 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = MW4GWYGX56;
-				GENERATE_INFOPLIST_FILE = YES;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@loader_path/../Frameworks",
-					"@executable_path/../Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.jasonchien.TrackPalTests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_VERSION = 6.0;
-				WRAPPER_EXTENSION = xctest;
 			};
 			name = Release;
 		};
@@ -613,16 +373,25 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		A2000070232F0160 /* Build configuration list for PBXNativeTarget "TrackPalTests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				A2000092232F0182 /* Debug */,
-				A2000093232F0183 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		A1000140232F0140 /* XCLocalSwiftPackageReference "TrackPalKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = TrackPalKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A1000110232F0110 /* TrackPalCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TrackPalCore;
+		};
+		A1000111232F0111 /* TrackPalSystem */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TrackPalSystem;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A1000080232F0070 /* Project object */;
 }

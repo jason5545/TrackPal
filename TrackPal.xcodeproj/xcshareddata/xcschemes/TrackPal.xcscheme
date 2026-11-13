@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Scheme
-   LastUpgradeVersion = "1500"
+   LastUpgradeVersion = "2700"
    version = "1.7">
    <BuildAction
       parallelizeBuildables = "YES"
@@ -21,20 +21,6 @@
                ReferencedContainer = "container:TrackPal.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
-         <BuildActionEntry
-            buildForTesting = "YES"
-            buildForRunning = "NO"
-            buildForProfiling = "NO"
-            buildForArchiving = "NO"
-            buildForAnalyzing = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "A2000060232F0150"
-               BuildableName = "TrackPalTests.xctest"
-               BlueprintName = "TrackPalTests"
-               ReferencedContainer = "container:TrackPal.xcodeproj">
-            </BuildableReference>
-         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -49,10 +35,21 @@
             parallelizable = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "A2000060232F0150"
-               BuildableName = "TrackPalTests.xctest"
-               BlueprintName = "TrackPalTests"
-               ReferencedContainer = "container:TrackPal.xcodeproj">
+               BlueprintIdentifier = "TrackPalCoreTests"
+               BuildableName = "TrackPalCoreTests"
+               BlueprintName = "TrackPalCoreTests"
+               ReferencedContainer = "container:TrackPalKit">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "TrackPalSystemTests"
+               BuildableName = "TrackPalSystemTests"
+               BlueprintName = "TrackPalSystemTests"
+               ReferencedContainer = "container:TrackPalKit">
             </BuildableReference>
          </TestableReference>
       </Testables>
